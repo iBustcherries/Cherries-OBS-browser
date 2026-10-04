@@ -1012,7 +1012,7 @@ index 571de9f..2b78886 100644
  	Q_PROPERTY(QIcon colorIcon READ GetColorIcon WRITE SetColorIcon DESIGNABLE true)
  	Q_PROPERTY(QIcon slideshowIcon READ GetSlideshowIcon WRITE SetSlideshowIcon DESIGNABLE true)
 diff --git a/frontend/widgets/OBSBasicControls.cpp b/frontend/widgets/OBSBasicControls.cpp
-index 81d8ad8..40e40de 100644
+index 81d8ad8..94a8523 100644
 --- a/frontend/widgets/OBSBasicControls.cpp
 +++ b/frontend/widgets/OBSBasicControls.cpp
 @@ -8,6 +8,12 @@ OBSBasicControls::OBSBasicControls(OBSBasic *main) : QFrame(nullptr), ui(new Ui:
@@ -1037,8 +1037,12 @@ index 81d8ad8..40e40de 100644
  	ui->pauseRecordButton->setVisible(false);
  	ui->replayBufferButton->setVisible(false);
  	ui->saveReplayButton->setVisible(false);
-@@ -106,17 +112,6 @@ void OBSBasicControls::StreamingPreparing()
- void OBSBasicControls::StreamingStarting(bool broadcastAutoStart)
+@@ -103,20 +109,9 @@ void OBSBasicControls::StreamingPreparing()
+ 	ui->streamButton->setText(QTStr("Basic.Main.PreparingStream"));
+ }
+ 
+-void OBSBasicControls::StreamingStarting(bool broadcastAutoStart)
++void OBSBasicControls::StreamingStarting(bool)
  {
  	ui->streamButton->setText(QTStr("Basic.Main.Connecting"));
 -
@@ -1055,9 +1059,12 @@ index 81d8ad8..40e40de 100644
  }
  
  void OBSBasicControls::StreamingStarted(bool withDelay)
-@@ -157,24 +152,23 @@ void OBSBasicControls::StreamingStopped(bool withDelay)
+@@ -155,26 +150,25 @@ void OBSBasicControls::StreamingStopped(bool withDelay)
+ 	}
+ }
  
- void OBSBasicControls::BroadcastStreamReady(bool ready)
+-void OBSBasicControls::BroadcastStreamReady(bool ready)
++void OBSBasicControls::BroadcastStreamReady(bool)
  {
 -	setClasses(ui->broadcastButton, ready ? "state-active" : "");
 +	ui->broadcastButton->setVisible(true);
@@ -1072,7 +1079,8 @@ index 81d8ad8..40e40de 100644
 +	ui->broadcastButton->setText("Manage Broadcast");
  }
  
- void OBSBasicControls::BroadcastStreamStarted(bool autoStop)
+-void OBSBasicControls::BroadcastStreamStarted(bool autoStop)
++void OBSBasicControls::BroadcastStreamStarted(bool)
  {
 -	ui->broadcastButton->setText(QTStr(autoStop ? "Basic.Main.AutoStopEnabled" : "Basic.Main.StopBroadcast"));
 -	if (autoStop) {
@@ -1088,9 +1096,12 @@ index 81d8ad8..40e40de 100644
  }
  
  void OBSBasicControls::RecordingStarted(bool pausable)
-@@ -263,14 +257,9 @@ void OBSBasicControls::UpdateStudioModeState(bool enabled)
+@@ -261,16 +255,11 @@ void OBSBasicControls::UpdateStudioModeState(bool enabled)
+ 	setClasses(ui->modeSwitch, enabled ? "state-active" : "");
+ }
  
- void OBSBasicControls::EnableBroadcastFlow(bool enabled)
+-void OBSBasicControls::EnableBroadcastFlow(bool enabled)
++void OBSBasicControls::EnableBroadcastFlow(bool)
  {
 -	ui->broadcastButton->setVisible(enabled);
 -	ui->broadcastButton->setEnabled(enabled);
