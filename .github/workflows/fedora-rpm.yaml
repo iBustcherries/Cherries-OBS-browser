@@ -70,6 +70,12 @@ jobs:
           g++ -std=c++20 -fPIC -Ibrowser-fork browser-fork/tests/wayland-dock-grab.cpp \
             $(pkg-config --cflags --libs Qt6Widgets) -o wayland-dock-grab-test
           QT_QPA_PLATFORM=offscreen ./wayland-dock-grab-test
+      - name: Check browser frame resizing and DPI
+        shell: bash
+        run: |
+          g++ -std=c++20 -fPIC -Ibrowser-fork browser-fork/tests/browser-frame-size.cpp \
+            $(pkg-config --cflags --libs Qt6Gui) -o browser-frame-size-test
+          ./browser-frame-size-test
       - name: Configure and build Fedora binaries
         shell: bash
         run: |

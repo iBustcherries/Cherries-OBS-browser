@@ -134,14 +134,18 @@ void QCefWidgetInternal::updateOSRGeometry()
 {
 	if (!osrState)
 		return;
-	osrState->width = std::max(1, width());
-	osrState->height = std::max(1, height());
-	osrState->scale = devicePixelRatioF();
+	{
+		std::lock_guard<std::mutex> lock(osrState->mutex);
+		osrState->width = std::max(1, width());
+		osrState->height = std::max(1, height());
+		osrState->scale = devicePixelRatioF();
+	}
 	if (cefBrowser) {
 		auto host = cefBrowser->GetHost();
 		QueueCEFTask([host]() {
 			host->NotifyScreenInfoChanged();
 			host->WasResized();
+			host->Invalidate(PET_VIEW);
 		});
 	}
 }
@@ -164,10 +168,9 @@ void QCefWidgetInternal::paintEvent(QPaintEvent *event)
 	}
 	QPainter painter(this);
 	painter.fillRect(rect(), palette().window());
-	if (!view.isNull())
-		painter.drawImage(rect(), view);
+	PaintBrowserFrame(painter, QPointF(0, 0), view);
 	if (popupVisible && !popup.isNull())
-		painter.drawImage(QRect(popupRect.x, popupRect.y, popupRect.width, popupRect.height), popup);
+		PaintBrowserFrame(painter, QPointF(popupRect.x, popupRect.y), popup);
 }
 
 void QCefWidgetInternal::hideEvent(QHideEvent *event)

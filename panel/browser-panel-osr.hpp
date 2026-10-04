@@ -1,6 +1,7 @@
 #pragma once
 
 #include "cef-headers.hpp"
+#include "browser-panel-frame.hpp"
 #include <QImage>
 #include <atomic>
 #include <memory>
@@ -14,9 +15,9 @@ struct QCefOSRState {
 	CefRect popupRect;
 	bool popupVisible = false;
 	bool dirty = false;
-	std::atomic<int> width{1};
-	std::atomic<int> height{1};
-	std::atomic<float> scale{1.0f};
+	int width = 1;
+	int height = 1;
+	float scale = 1.0f;
 	std::atomic<cef_cursor_type_t> cursor{CT_POINTER};
 };
 
@@ -27,16 +28,18 @@ public:
 
 	void GetViewRect(CefRefPtr<CefBrowser>, CefRect &rect) override
 	{
-		rect = CefRect(0, 0, state->width.load(), state->height.load());
+		std::lock_guard<std::mutex> lock(state->mutex);
+		rect = CefRect(0, 0, state->width, state->height);
 	}
 
 	bool GetScreenInfo(CefRefPtr<CefBrowser>, CefScreenInfo &info) override
 	{
-		info.device_scale_factor = state->scale.load();
+		std::lock_guard<std::mutex> lock(state->mutex);
+		info.device_scale_factor = state->scale;
 		info.depth = 32;
 		info.depth_per_component = 8;
 		info.is_monochrome = false;
-		info.rect = info.available_rect = CefRect(0, 0, state->width.load(), state->height.load());
+		info.rect = info.available_rect = CefRect(0, 0, state->width, state->height);
 		return true;
 	}
 
@@ -45,11 +48,14 @@ public:
 	{
 		if (!buffer || width <= 0 || height <= 0)
 			return;
-		// CEF owns buffer only for this callback. Copy before returning.
-		QImage frame =
-			QImage(static_cast<const uchar *>(buffer), width, height, QImage::Format_ARGB32_Premultiplied)
-				.copy();
 		std::lock_guard<std::mutex> lock(state->mutex);
+		QSize logicalSize = type == PET_POPUP ? QSize(state->popupRect.width, state->popupRect.height)
+						      : QSize(state->width, state->height);
+		// CEF owns buffer only for this callback. Copy before returning, with
+		// geometry and DPI from one coherent viewport snapshot.
+		QImage frame = CopyBrowserFrame(buffer, QSize(width, height), logicalSize, state->scale);
+		if (frame.isNull())
+			return;
 		(type == PET_POPUP ? state->popup : state->view) = std::move(frame);
 		state->dirty = true;
 	}
