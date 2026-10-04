@@ -351,6 +351,11 @@ void QCefWidgetInternal::unsetToplevelXdndProxy()
 
 void QCefWidgetInternal::Init()
 {
+	/* showEvent starts CEF asynchronously. Keep the retry timer running
+	 * until the manager has finished initialization. */
+	if (os_event_try(cef_started_event) != 0)
+		return;
+
 #ifndef __APPLE__
 	WId handle = windowless ? 0 : window->winId();
 	QSize size = this->size();
