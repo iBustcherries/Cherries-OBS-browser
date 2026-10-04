@@ -2,6 +2,7 @@
 #include "browser-panel-client.hpp"
 #include "cef-headers.hpp"
 #include "browser-app.hpp"
+#include "browser-panel-dock.hpp"
 
 #include <QWindow>
 #include <QApplication>
@@ -171,6 +172,7 @@ QCefWidgetInternal::QCefWidgetInternal(QWidget *parent, const std::string &url_,
 	windowless = obs_get_nix_platform() == OBS_NIX_PLATFORM_WAYLAND;
 #endif
 	if (windowless) {
+		InstallWaylandDockDragCleanup(qobject_cast<QDockWidget *>(parent));
 		osrState = std::make_shared<QCefOSRState>();
 		setFocusPolicy(Qt::StrongFocus);
 		setMouseTracking(true);
