@@ -324,7 +324,7 @@ bool QCefBrowserClient::RunContextMenu(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame
 #endif
 	std::vector<std::tuple<std::string, int, bool, int, bool>> menu_items;
 	menu_items.reserve(model->GetCount());
-	for (int i = 0; i < model->GetCount(); i++) {
+	for (size_t i = 0; i < static_cast<size_t>(model->GetCount()); i++) {
 		menu_items.push_back({model->GetLabelAt(i), model->GetCommandIdAt(i), model->IsEnabledAt(i),
 				      model->GetTypeAt(i), model->IsCheckedAt(i)});
 	}

@@ -4,6 +4,9 @@ Status: initial implementation. Local syntax checks pass against CEF 7871,
 Qt 6.4.2 and OBS 30 development headers, with and without ENABLE_WAYLAND.
 Full pinned-OBS compilation and real compositor testing are pending.
 This branch is not a validated Fedora RPM release.
+The Fedora 44 workflow builds a separate experimental RPM under
+`/opt/cherries-obs`, with a `cherries-obs-wayland` launcher and its own
+configuration directory. A successful package build still needs live testing.
 
 ## Integration
 
