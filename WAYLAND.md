@@ -6,7 +6,9 @@ Full pinned-OBS compilation and real compositor testing are pending.
 This branch is not a validated Fedora RPM release.
 The Fedora 44 workflow builds a separate experimental RPM under
 `/opt/cherries-obs`, with a `cherries-obs-wayland` launcher and its own
-configuration directory. A successful package build still needs live testing.
+configuration directory. The RPM includes x264 support and therefore uses
+RPM Fusion Free for its x264 dependency. A successful package build still
+needs live testing.
 
 ## Integration
 
