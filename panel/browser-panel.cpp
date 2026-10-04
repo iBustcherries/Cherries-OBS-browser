@@ -5,6 +5,7 @@
 
 #include <QWindow>
 #include <QApplication>
+#include <QGuiApplication>
 
 #ifdef ENABLE_BROWSER_QT_LOOP
 #include <QEventLoop>
@@ -166,6 +167,51 @@ QCefWidgetInternal::QCefWidgetInternal(QWidget *parent, const std::string &url_,
 	  url(url_),
 	  rqc(rqc_)
 {
+#ifdef ENABLE_WAYLAND
+	windowless = obs_get_nix_platform() == OBS_NIX_PLATFORM_WAYLAND;
+#endif
+	if (windowless) {
+		osrState = std::make_shared<QCefOSRState>();
+		setFocusPolicy(Qt::StrongFocus);
+		setMouseTracking(true);
+		setAttribute(Qt::WA_InputMethodEnabled);
+		updateOSRGeometry();
+		connect(&paintTimer, &QTimer::timeout, this, [this]() {
+			Qt::CursorShape shape = Qt::ArrowCursor;
+			switch (osrState->cursor.load()) {
+			case CT_HAND:
+				shape = Qt::PointingHandCursor;
+				break;
+			case CT_IBEAM:
+				shape = Qt::IBeamCursor;
+				break;
+			case CT_CROSS:
+				shape = Qt::CrossCursor;
+				break;
+			case CT_WAIT:
+				shape = Qt::WaitCursor;
+				break;
+			case CT_NONE:
+				shape = Qt::BlankCursor;
+				break;
+			default:
+				break;
+			}
+			if (cursor().shape() != shape)
+				setCursor(shape);
+			bool dirty;
+			{
+				std::lock_guard<std::mutex> lock(osrState->mutex);
+				dirty = osrState->dirty;
+				osrState->dirty = false;
+			}
+			if (dirty)
+				update();
+		});
+		paintTimer.start(33);
+		return;
+	}
+
 	setAttribute(Qt::WA_PaintOnScreen);
 	setAttribute(Qt::WA_StaticContents);
 	setAttribute(Qt::WA_NoSystemBackground);
@@ -261,7 +307,7 @@ static bool XWindowHasAtom(Display *display, Window w, Atom a)
  */
 void QCefWidgetInternal::unsetToplevelXdndProxy()
 {
-	if (!cefBrowser)
+	if (windowless || !cefBrowser)
 		return;
 
 	CefWindowHandle browserHandle = cefBrowser->GetHost()->GetWindowHandle();
@@ -306,50 +352,55 @@ void QCefWidgetInternal::unsetToplevelXdndProxy()
 void QCefWidgetInternal::Init()
 {
 #ifndef __APPLE__
-	WId handle = window->winId();
+	WId handle = windowless ? 0 : window->winId();
 	QSize size = this->size();
 	size *= devicePixelRatioF();
-	bool success = QueueCEFTask(
-		[this, handle, size]()
+	bool success = QueueCEFTask([this, handle, size]()
 #else
 	WId handle = winId();
-	bool success = QueueCEFTask(
-		[this, handle]()
+	bool success = QueueCEFTask([this, handle]()
 #endif
-		{
-			CefWindowInfo windowInfo;
+				    {
+					    CefWindowInfo windowInfo;
 
-			/* Make sure Init isn't called more than once. */
-			if (cefBrowser)
-				return;
+					    /* Make sure Init isn't called more than once. */
+					    if (cefBrowser)
+						    return;
 
 #ifdef __APPLE__
-			QSize size = this->size();
+					    QSize size = this->size();
 #endif
 
 #if CHROME_VERSION_BUILD >= 6533
-			windowInfo.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
+					    windowInfo.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
 #endif
 
-			windowInfo.SetAsChild((CefWindowHandle)handle, CefRect(0, 0, size.width(), size.height()));
+					    if (windowless)
+						    windowInfo.SetAsWindowless(0);
+					    else
+						    windowInfo.SetAsChild((CefWindowHandle)handle,
+									  CefRect(0, 0, size.width(), size.height()));
 
-			CefRefPtr<QCefBrowserClient> browserClient =
-				new QCefBrowserClient(this, script, allowAllPopups_);
+					    CefRefPtr<QCefBrowserClient> browserClient =
+						    new QCefBrowserClient(this, script, allowAllPopups_);
 
-			CefBrowserSettings cefBrowserSettings;
-			cefBrowser = CefBrowserHost::CreateBrowserSync(windowInfo, browserClient, url,
-								       cefBrowserSettings,
-								       CefRefPtr<CefDictionaryValue>(), rqc);
+					    CefBrowserSettings cefBrowserSettings;
+					    if (windowless)
+						    cefBrowserSettings.windowless_frame_rate = 30;
+					    cefBrowser = CefBrowserHost::CreateBrowserSync(
+						    windowInfo, browserClient, url, cefBrowserSettings,
+						    CefRefPtr<CefDictionaryValue>(), rqc);
 
 #ifdef __linux__
-			QueueCEFTask([this]() { unsetToplevelXdndProxy(); });
+					    if (!windowless)
+						    QueueCEFTask([this]() { unsetToplevelXdndProxy(); });
 #endif
-		});
+				    });
 
 	if (success) {
 		timer.stop();
 #ifndef __APPLE__
-		if (!container) {
+		if (!windowless && !container) {
 			container = QWidget::createWindowContainer(window, this);
 			container->show();
 		}
@@ -362,12 +413,20 @@ void QCefWidgetInternal::Init()
 void QCefWidgetInternal::resizeEvent(QResizeEvent *event)
 {
 	QWidget::resizeEvent(event);
+	if (windowless) {
+		updateOSRGeometry();
+		return;
+	}
 #ifndef __APPLE__
 	Resize();
 }
 
 void QCefWidgetInternal::Resize()
 {
+	if (windowless) {
+		updateOSRGeometry();
+		return;
+	}
 	if (os_event_try(cef_started_event) != 0) {
 		return;
 	}
@@ -418,6 +477,17 @@ void QCefWidgetInternal::finishCloseBrowser()
 void QCefWidgetInternal::showEvent(QShowEvent *event)
 {
 	QWidget::showEvent(event);
+	if (windowless) {
+		paintTimer.start(33);
+		updateOSRGeometry();
+		if (cefBrowser) {
+			auto host = cefBrowser->GetHost();
+			QueueCEFTask([host]() {
+				host->WasHidden(false);
+				host->WasResized();
+			});
+		}
+	}
 
 	if (!cefBrowser) {
 		obs_browser_initialize();
@@ -429,7 +499,7 @@ void QCefWidgetInternal::showEvent(QShowEvent *event)
 
 QPaintEngine *QCefWidgetInternal::paintEngine() const
 {
-	return nullptr;
+	return windowless ? QWidget::paintEngine() : nullptr;
 }
 
 void QCefWidgetInternal::setURL(const std::string &url_)
@@ -619,4 +689,10 @@ extern "C" EXPORT QCef *obs_browser_create_qcef(void)
 extern "C" EXPORT int obs_browser_qcef_version_export(void)
 {
 	return BROWSER_PANEL_VERSION;
+}
+
+// Capability queried by the matching OBS frontend header.
+extern "C" EXPORT bool obs_browser_qcef_wayland_osr(void)
+{
+	return true;
 }

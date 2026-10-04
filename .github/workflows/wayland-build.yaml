@@ -1,0 +1,50 @@
+name: Experimental Wayland OBS build
+
+on:
+  push:
+    branches: [wayland-osr-docks]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out browser changes
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          path: browser-fork
+          persist-credentials: false
+      - name: Check out pinned OBS integration target
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: obsproject/obs-studio
+          ref: cffa83ba552f1ef6a0a05851c3aa07b3811d7e58
+          path: obs
+          submodules: recursive
+          persist-credentials: false
+      - name: Integrate fork into OBS
+        shell: bash
+        run: |
+          rsync -a --delete --exclude=.git --exclude=.github browser-fork/ obs/plugins/obs-browser/
+          git -C obs diff --submodule=short
+      - name: Build OBS and CEF browser panels
+        uses: ./obs/.github/actions/build-obs
+        with:
+          target: x86_64
+          config: RelWithDebInfo
+          workingDirectory: ${{ github.workspace }}/obs
+      - name: Archive experimental build
+        shell: bash
+        run: tar -C obs/build_ubuntu/install/RelWithDebInfo -cJf cherries-obs-wayland-ubuntu-x86_64.tar.xz .
+      - name: Upload build for testing
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: cherries-obs-wayland-ubuntu-x86_64
+          path: cherries-obs-wayland-ubuntu-x86_64.tar.xz
+          retention-days: 14

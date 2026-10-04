@@ -20,6 +20,8 @@
 #include <X11/Xlib.h>
 #endif
 
+extern bool QueueCEFTask(std::function<void()> task);
+
 #define MENU_ITEM_DEVTOOLS MENU_ID_CUSTOM_FIRST
 #define MENU_ITEM_MUTE MENU_ID_CUSTOM_FIRST + 1
 #define MENU_ITEM_ZOOM_IN MENU_ID_CUSTOM_FIRST + 2
@@ -84,6 +86,15 @@ bool QCefBrowserClient::OnChromeCommand(CefRefPtr<CefBrowser>, int, cef_window_o
 #endif
 
 /* CefDisplayHandler */
+bool QCefBrowserClient::OnCursorChange(CefRefPtr<CefBrowser>, CefCursorHandle, cef_cursor_type_t type,
+				       const CefCursorInfo &)
+{
+	if (!renderHandler)
+		return false;
+	static_cast<QCefOSRRenderHandler *>(renderHandler.get())->setCursor(type);
+	return true;
+}
+
 void QCefBrowserClient::OnTitleChange(CefRefPtr<CefBrowser> browser, const CefString &title)
 {
 	if (widget && widget->cefBrowser && widget->cefBrowser->IsSame(browser)) {
@@ -104,7 +115,11 @@ void QCefBrowserClient::OnTitleChange(CefRefPtr<CefBrowser> browser, const CefSt
 		SetWindowTextW((HWND)handl, str_title.c_str());
 #elif defined(__linux__)
 		CefWindowHandle handl = browser->GetHost()->GetWindowHandle();
-		XStoreName(cef_get_xdisplay(), handl, newTitle.ToString().c_str());
+		if (handl && (!widget || !widget->windowless)) {
+			Display *display = cef_get_xdisplay();
+			if (display)
+				XStoreName(display, handl, newTitle.ToString().c_str());
+		}
 #endif
 	}
 }
@@ -196,6 +211,17 @@ bool QCefBrowserClient::OnBeforePopup(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>
 				      CefWindowInfo &windowInfo, CefRefPtr<CefClient> &, CefBrowserSettings &,
 				      CefRefPtr<CefDictionaryValue> &, bool *)
 {
+	// Native CEF popup windows and DevTools still use the X11 panel path.
+	// Route OSR popup requests to the user's browser until Qt popup hosting
+	// has been implemented (window.open/OAuth compatibility is not complete).
+	if (widget && widget->windowless) {
+		QUrl popupUrl(QString::fromStdString(target_url.ToString()));
+		QMetaObject::invokeMethod(
+			QCoreApplication::instance(), [popupUrl]() { QDesktopServices::openUrl(popupUrl); },
+			Qt::QueuedConnection);
+		return true;
+	}
+
 	if (allowAllPopups) {
 #ifdef _WIN32
 		HWND hwnd = (HWND)widget->effectiveWinId();
@@ -282,15 +308,20 @@ void QCefBrowserClient::OnBeforeContextMenu(CefRefPtr<CefBrowser> browser, CefRe
 	model->AddItem(MENU_ITEM_ZOOM_OUT, obs_module_text("Zoom.Out"));
 	model->AddSeparator();
 	model->InsertItemAt(model->GetCount(), MENU_ITEM_COPY_URL, obs_module_text("CopyUrl"));
-	model->InsertItemAt(model->GetCount(), MENU_ITEM_DEVTOOLS, obs_module_text("Inspect"));
+	if (!widget || !widget->windowless)
+		model->InsertItemAt(model->GetCount(), MENU_ITEM_DEVTOOLS, obs_module_text("Inspect"));
 	model->InsertCheckItemAt(model->GetCount(), MENU_ITEM_MUTE, QObject::tr("Mute").toUtf8().constData());
 	model->SetChecked(MENU_ITEM_MUTE, browser->GetHost()->IsAudioMuted());
 }
 
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(__linux__)
 bool QCefBrowserClient::RunContextMenu(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, CefRefPtr<CefContextMenuParams>,
 				       CefRefPtr<CefMenuModel> model, CefRefPtr<CefRunContextMenuCallback> callback)
 {
+#ifdef __linux__
+	if (!widget || !widget->windowless)
+		return false;
+#endif
 	std::vector<std::tuple<std::string, int, bool, int, bool>> menu_items;
 	menu_items.reserve(model->GetCount());
 	for (int i = 0; i < model->GetCount(); i++) {
@@ -298,7 +329,7 @@ bool QCefBrowserClient::RunContextMenu(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame
 				      model->GetTypeAt(i), model->IsCheckedAt(i)});
 	}
 
-	QMetaObject::invokeMethod(QCoreApplication::instance()->thread(), [menu_items, callback]() {
+	QMetaObject::invokeMethod(QCoreApplication::instance(), [menu_items, callback]() {
 		QMenu contextMenu;
 		std::string name;
 		int command_id;
@@ -311,7 +342,7 @@ bool QCefBrowserClient::RunContextMenu(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame
 			switch (type_id) {
 			case MENUITEMTYPE_CHECK:
 			case MENUITEMTYPE_COMMAND: {
-				QAction *item = new QAction(name.c_str());
+				QAction *item = new QAction(name.c_str(), &contextMenu);
 				item->setEnabled(enabled);
 				if (type_id == MENUITEMTYPE_CHECK) {
 					item->setCheckable(true);
@@ -329,9 +360,9 @@ bool QCefBrowserClient::RunContextMenu(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame
 		QAction *action = contextMenu.exec(QCursor::pos());
 		if (action) {
 			QVariant cmdId = action->property("cmd_id");
-			callback.get()->Continue(cmdId.toInt(), EVENTFLAG_NONE);
+			QueueCEFTask([callback, id = cmdId.toInt()]() { callback->Continue(id, EVENTFLAG_NONE); });
 		} else {
-			callback.get()->Cancel();
+			QueueCEFTask([callback]() { callback->Cancel(); });
 		}
 	});
 	return true;
@@ -349,6 +380,8 @@ bool QCefBrowserClient::OnContextMenuCommand(CefRefPtr<CefBrowser> browser, CefR
 	QPoint pos;
 	switch (command_id) {
 	case MENU_ITEM_DEVTOOLS:
+		if (!widget || widget->windowless)
+			return true;
 #if defined(_WIN32) && CHROME_VERSION_BUILD < 6533
 		windowInfo.SetAsPopup(host->GetWindowHandle(), "");
 #endif
