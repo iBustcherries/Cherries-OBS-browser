@@ -1,24 +1,46 @@
-# Native accounts and multistream
+# Native accounts and shared multistream
 
-The experimental Fedora RPM includes **Docks → Accounts & Multistream**.
-Add multiple Twitch and YouTube accounts, check the destinations you want,
-and click **Start selected streams**. OBS renders once and all destinations
-share the primary stream's H.264 video and AAC audio encoders. Set resolution,
-frame rate and bitrate in OBS as usual. Upload bandwidth increases for each
-destination. Connections have independent reconnect handling; stopping the
-primary OBS stream stops all destinations.
+Use **Settings → Stream** to add multiple Twitch and YouTube accounts. Check
+**Use** for each destination you want to stream to. Account connections and
+selection changes save immediately, including when the settings dialog is closed
+with Cancel. Existing saved accounts from release 5 are retained; the separate
+Accounts & Multistream dock is removed.
 
-Each selected YouTube channel opens OBS's broadcast dialog before starting.
-Choose **Stream now** or a broadcast with automatic start enabled. Broadcast
-title, privacy and other broadcast settings remain available in that dialog.
-The connection label **Sending** means OBS is transmitting; it does not verify
-that a platform has made the broadcast public/live.
+Connected-platform indicators appear only for saved connected sessions. They
+refer to account authorization, not whether you are currently live. Twitch Chat
+Add-Ons appears in Advanced Options when a Twitch account is connected and
+applies BetterTTV/FrankerFaceZ to the native Twitch chat dock.
 
-Account sessions persist across restarts in an atomic, owner-readable/writable
-account file. Removing an account deletes its saved session locally. Twitch
-sessions are validated at connection and hourly; rotating refresh tokens are
-saved after refresh. Google authorization uses the system browser, a loopback
-callback with state validation, and PKCE.
+The Controls dock has separate full-width Manage Broadcast and Start Streaming
+buttons. **Manage Broadcast** opens a separate window with three tabs:
+
+- **Twitch Stream Info:** Twitch's embedded stream-info page. Sign in to the
+  displayed account there if prompted; system-browser OAuth and embedded browser
+  cookies are separate. Each saved Twitch account has its own browser cookies.
+- **Create New YouTube Stream:** OBS's native creation form, including title,
+  description, privacy, category, thumbnail, scheduling and latency settings.
+- **Select Existing YouTube Stream:** a refreshable broadcast table showing
+  title, local scheduled time, privacy and status, with selected-broadcast details.
+
+When several accounts are saved for a platform, Manage Broadcast asks which
+account to edit. Prepare each selected YouTube account before starting. Use a
+broadcast with automatic start enabled. Creating/selecting a broadcast prepares
+its stream key for this OBS session; it does not start streaming. After restarting
+OBS, select the broadcast again. Completed broadcasts must be replaced.
+
+**Start Streaming** in Controls starts all selected destinations, including
+starts requested through OBS hotkeys and the frontend API. Stopping OBS's primary
+stream stops all destinations. OBS renders once and shares the same H.264 video
+and AAC audio encoders across outputs; resolution, FPS and bitrate are shared.
+Additional destinations add upload bandwidth and a small amount of connection
+and packet handling. Each connection reconnects independently. Stream keys are
+not saved in the account file. **Sending** reports transmitted bytes, not verified
+platform live status. Kick account integration is not included in this release.
+
+Account sessions persist in an atomic, owner-readable/writable file. Removing
+an account deletes its saved session locally. Twitch validates at connection
+and hourly, and rotating refresh tokens are saved. Google authorization uses
+the system browser, loopback state validation and PKCE.
 
 ## Application setup
 
@@ -41,9 +63,3 @@ Desktop app JSON. The Fedora build generates a private build header, never
 commits the credentials, and never embeds a confidential Twitch secret or user
 access tokens. A Google Desktop client is distributed with the application;
 the repository secret keeps it out of source and logs, not out of the binary.
-
-Native OBS account connections in **Settings → Stream** are also enabled.
-Use the multistream dock to start all checked accounts together. Existing OBS
-service/account settings are temporarily replaced for that session and restored
-after stopping. The dock currently uses one video track and one audio track,
-with identical encoding settings for all destinations.

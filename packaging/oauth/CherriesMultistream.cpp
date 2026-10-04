@@ -6,10 +6,20 @@
 #include <dialogs/OBSYoutubeActions.hpp>
 #include <utility/YoutubeApiWrappers.hpp>
 #include <widgets/OBSBasic.hpp>
+#include <settings/OBSBasicSettings.hpp>
 #include <qt-wrappers.hpp>
 #include <obs-frontend-api.h>
-#include <browser-panel-dock.hpp>
+#include <browser-panel.hpp>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QTabWidget>
+#include <QInputDialog>
+#include <QPointer>
+#include <QFormLayout>
+#include <QCryptographicHash>
 #include <QCheckBox>
+#include <QComboBox>
+#include <QSignalBlocker>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -27,6 +37,8 @@
 #include <QTimer>
 #include <QVBoxLayout>
 
+extern QCef *cef;
+
 class CherriesMultistream : public QWidget {
 	struct Account {
 		QString id;
@@ -36,14 +48,19 @@ class CherriesMultistream : public QWidget {
 		QString server;
 		QString key;
 		QString status = "Offline";
+		bool connected = true;
+		QString broadcast;
+		std::unique_ptr<QCefCookieManager> cookies;
 		OBSOutputAutoRelease output;
 		OBSServiceAutoRelease service;
 	};
 	OBSBasic *main;
 	std::vector<std::unique_ptr<Account>> accounts;
 	QTableWidget *table;
-	QPushButton *start;
-	QPushButton *stop;
+	QLabel *connections;
+	QComboBox *addonChoice;
+	QWidget *addons;
+	bool internalStart = false;
 	QPushButton *addTwitch;
 	QPushButton *addYouTube;
 	QPushButton *remove;
@@ -156,8 +173,24 @@ class CherriesMultistream : public QWidget {
 			table->setItem(i, 2, new QTableWidgetItem(account.status));
 		}
 		const bool busy = running || preparing || obs_frontend_streaming_active();
-		start->setEnabled(!busy && !accounts.empty());
-		stop->setEnabled(running || bool(previousService));
+		QStringList states;
+		bool twitchConnected = false, youtubeConnected = false;
+		for (const auto &a : accounts) {
+			if (!a->connected)
+				continue;
+			if (dynamic_cast<TwitchAuth *>(a->auth.get()))
+				twitchConnected = true;
+			else
+				youtubeConnected = true;
+		}
+		if (twitchConnected)
+			states << "Twitch: <span style='color:#63d471'>Connected</span>";
+		if (youtubeConnected)
+			states << "YouTube: <span style='color:#63d471'>Connected</span>";
+		connections->setText(states.join("<br>"));
+		connections->setVisible(!states.isEmpty());
+		addons->setVisible(twitchConnected);
+		addons->setEnabled(!busy);
 		addTwitch->setEnabled(!busy);
 		addYouTube->setEnabled(!busy);
 		remove->setEnabled(!busy);
@@ -192,6 +225,8 @@ class CherriesMultistream : public QWidget {
 		for (auto &existing : accounts) {
 			if (existing->id == account->id) {
 				existing->auth = account->auth;
+				existing->connected = true;
+				existing->key.clear();
 				existing->label = account->label;
 				Save();
 				Update();
@@ -237,7 +272,9 @@ class CherriesMultistream : public QWidget {
 		for (auto &account : accounts) {
 			if (account->output)
 				obs_output_force_stop(account->output);
-			account->status = "Offline";
+			account->status = account->key.isEmpty() || dynamic_cast<TwitchAuth *>(account->auth.get())
+						  ? "Offline"
+						  : "Broadcast ready";
 		}
 		Update();
 	}
@@ -252,14 +289,16 @@ class CherriesMultistream : public QWidget {
 		for (auto &account : accounts) {
 			account->output = nullptr;
 			account->service = nullptr;
-			account->server.clear();
-			account->key.clear();
+
 			if (!account->selected)
 				continue;
 			if (auto twitch = dynamic_cast<TwitchAuth *>(account->auth.get())) {
 				if (!twitch->GetChannelInfo()) {
 					Save();
-					message->setText("Reconnect the Twitch account before starting.");
+					message->setText(
+						"Reconnect the Twitch account in Settings → Stream before starting.");
+					account->connected = false;
+					QMessageBox::warning(main, "Twitch connection", message->text());
 					preparing = false;
 					Update();
 					return;
@@ -267,29 +306,31 @@ class CherriesMultistream : public QWidget {
 				account->server = "rtmp://live.twitch.tv/app";
 				account->key = QString::fromStdString(twitch->key());
 			} else {
-				OBSYoutubeActions dialog(this, account->auth.get(), false);
-				bool ready = false;
-				connect(&dialog, &OBSYoutubeActions::ok, &dialog,
-					[&](const std::string &, const std::string &, const std::string &key,
-					    bool autostart, bool, bool) {
-						if (!autostart) {
-							QMessageBox::warning(
-								this, "YouTube multistream",
-								"Choose Stream now or a broadcast with automatic start enabled.");
-							return;
-						}
-						account->server = "rtmps://a.rtmps.youtube.com/live2";
-						account->key = QString::fromStdString(key);
-						ready = !key.empty();
-					});
-				dialog.exec();
-				Save();
-				if (!ready) {
+				if (account->key.isEmpty()) {
 					preparing = false;
 					Update();
+					QMessageBox::information(
+						main, "Manage Broadcast",
+						"Create or select a YouTube broadcast in Manage Broadcast before starting.");
+					Manage();
+					return;
+				}
+				auto youtube = dynamic_cast<YoutubeApiWrappers *>(account->auth.get());
+				json11::Json latest;
+				if (!youtube || !youtube->FindBroadcast(account->broadcast, latest) ||
+				    latest["items"].array_items().empty() ||
+				    latest["items"].array_items()[0]["status"]["lifeCycleStatus"].string_value() ==
+					    "complete") {
+					account->key.clear();
+					message->setText(
+						"The selected YouTube broadcast is no longer available. Choose it again in Manage Broadcast.");
+					preparing = false;
+					Update();
+					QMessageBox::warning(main, "YouTube broadcast", message->text());
 					return;
 				}
 			}
+
 			if (!primary)
 				primary = account.get();
 		}
@@ -327,7 +368,9 @@ class CherriesMultistream : public QWidget {
 		main->SetService(service);
 		primary->status = "Connecting";
 		startup.start(45000);
+		internalStart = true;
 		main->StartStreaming();
+		internalStart = false;
 	}
 
 	void StartExtra()
@@ -398,10 +441,98 @@ class CherriesMultistream : public QWidget {
 	}
 
 public:
+	bool HasAccounts() const { return !accounts.empty(); }
+	bool HasSelected() const
+	{
+		for (const auto &a : accounts)
+			if (a->selected)
+				return true;
+		return false;
+	}
+	bool StartSelected()
+	{
+		if (internalStart || accounts.empty())
+			return false;
+		if (!HasSelected()) {
+			QMessageBox::information(main, "Stream destinations",
+						 "Select at least one destination in Settings → Stream.");
+			return true;
+		}
+		Begin();
+		return true;
+	}
+	void Detach()
+	{
+		ImportNative();
+		addons->setParent(this);
+		qobject_cast<QVBoxLayout *>(layout())->addWidget(addons);
+		hide();
+		setParent(main);
+	}
+	void Attach(QWidget *page)
+	{
+		ImportNative();
+		setParent(page);
+		auto advanced = page->findChild<QFormLayout *>("serviceAdvancedOptionsLayout");
+		if (advanced)
+			advanced->addRow(addons);
+		if (auto legacy = page->findChild<QComboBox *>("twitchAddonDropdown")) {
+			addonChoice->setCurrentIndex(legacy->currentIndex());
+			connect(addonChoice, qOverload<int>(&QComboBox::currentIndexChanged), legacy,
+				&QComboBox::setCurrentIndex);
+		}
+
+		auto layout = qobject_cast<QVBoxLayout *>(page->layout());
+		if (layout)
+			layout->insertWidget(1, this);
+		show();
+		Update();
+	}
+	void ImportNative()
+	{
+		if (running || preparing)
+			return;
+		auto auth = std::dynamic_pointer_cast<OAuth>(main->auth);
+		if (!auth || auth->refresh_token.empty())
+			return;
+		auto account = std::make_unique<Account>();
+		account->auth = auth;
+		if (auto twitch = dynamic_cast<TwitchAuth *>(auth.get())) {
+			account->id = "twitch:" + QString::fromStdString(twitch->name);
+			account->label = "Twitch · " + QString::fromStdString(twitch->name);
+		} else if (auto youtube = dynamic_cast<YoutubeApiWrappers *>(auth.get())) {
+			for (const auto &a : accounts)
+				if (a->auth == auth)
+					return;
+			ChannelDescription channel;
+			if (!youtube->GetChannelDescription(channel))
+				return;
+			account->id = "youtube:" + channel.id;
+			account->label = "YouTube · " + channel.title;
+		} else
+			return;
+		for (auto &a : accounts)
+			if (a->id == account->id) {
+				a->auth = auth;
+				a->connected = true;
+				Save();
+				Update();
+				return;
+			}
+		accounts.push_back(std::move(account));
+		Save();
+		Update();
+	}
+	void Manage();
 	explicit CherriesMultistream(OBSBasic *obsMain) : QWidget(obsMain), main(obsMain)
 	{
 		auto layout = new QVBoxLayout(this);
-		message = new QLabel("Select accounts and start one shared stream to Twitch and YouTube.", this);
+		connections = new QLabel(this);
+		connections->setTextFormat(Qt::RichText);
+		layout->addWidget(connections);
+		message = new QLabel(
+			"Select destinations. Start Streaming in Controls starts all selected accounts. Account changes are saved immediately.",
+			this);
 		message->setWordWrap(true);
 		layout->addWidget(message);
 		table = new QTableWidget(0, 3, this);
@@ -409,6 +540,7 @@ public:
 		table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
 		table->setEditTriggers(QAbstractItemView::NoEditTriggers);
 		table->setSelectionBehavior(QAbstractItemView::SelectRows);
+		table->setMaximumHeight(150);
 		layout->addWidget(table);
 		auto row = new QHBoxLayout;
 		addTwitch = new QPushButton("Add Twitch", this);
@@ -434,30 +566,47 @@ public:
 			else if (chooser.clickedButton() == youtube)
 				CherriesYouTubeClient(this, true, true);
 		});
-		row = new QHBoxLayout;
-		start = new QPushButton("Start selected streams", this);
-		stop = new QPushButton("Stop all streams", this);
-		row->addWidget(start);
-		row->addWidget(stop);
-		layout->addLayout(row);
 		connect(addTwitch, &QPushButton::clicked, this, [this]() { Add(true); });
 		connect(addYouTube, &QPushButton::clicked, this, [this]() { Add(false); });
 		connect(remove, &QPushButton::clicked, this, [this]() {
 			const int index = table->currentRow();
 			if (index >= 0 && index < int(accounts.size()) && !running && !preparing) {
 				table->setRowCount(0);
+				if (auto settings = qobject_cast<OBSBasicSettings *>(window())) {
+					auto native = std::dynamic_pointer_cast<OAuth>(settings->auth);
+					bool same = native == accounts[index]->auth;
+					if (auto t = dynamic_cast<TwitchAuth *>(native.get()))
+						same = accounts[index]->id ==
+						       "twitch:" + QString::fromStdString(t->name);
+					if (same) {
+						settings->auth.reset();
+						main->auth.reset();
+						main->SetBroadcastFlowEnabled(false);
+						Auth::Save();
+						settings->ui->disconnectAccount->hide();
+						settings->ui->connectedAccountLabel->hide();
+						settings->ui->connectedAccountText->hide();
+						settings->ui->key->clear();
+					}
+				}
 				accounts.erase(accounts.begin() + index);
 				Save();
 				Update();
 			}
 		});
-		connect(start, &QPushButton::clicked, this, [this]() { Begin(); });
-		connect(stop, &QPushButton::clicked, this, [this]() {
-			StopExtra();
-			if (obs_frontend_streaming_active() || running)
-				main->ForceStopStreaming();
-			else
-				Restore();
+		addons = new QWidget(this);
+		auto addonLayout = new QHBoxLayout(addons);
+		addonLayout->setContentsMargins(0, 0, 0, 0);
+		addonLayout->addWidget(new QLabel("Twitch Chat Add-Ons", addons));
+		addonChoice = new QComboBox(addons);
+		addonChoice->addItems({"None", "BetterTTV", "FrankerFaceZ", "BetterTTV and FrankerFaceZ"});
+		addonChoice->setCurrentIndex(config_get_int(main->Config(), "Twitch", "AddonChoice"));
+		addonLayout->addWidget(addonChoice, 1);
+		layout->addWidget(addons);
+		connect(addonChoice, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int choice) {
+			config_set_int(main->Config(), "Twitch", "AddonChoice", choice);
+			config_save_safe(main->Config(), "tmp", nullptr);
+			CherriesRefreshTwitchAddons();
 		});
 		connect(main, &OBSBasic::StreamingStopped, this, [this]() {
 			if (preparing && previousService && !obs_frontend_streaming_active()) {
@@ -508,6 +657,7 @@ public:
 		Load();
 		Update();
 		obs_frontend_add_event_callback(Event, this);
+		hide();
 	}
 
 	~CherriesMultistream() override
@@ -520,11 +670,139 @@ public:
 	}
 };
 
+static QPointer<CherriesMultistream> manager;
+
 void CherriesInstallMultistream(OBSBasic *main)
 {
-	auto panel = new CherriesMultistream(main);
-	if (!obs_frontend_add_dock_by_id("cherriesMultistream", "Accounts & Multistream", panel))
-		delete panel;
-	else if (QApplication::platformName().contains("wayland"))
-		InstallWaylandDockDragCleanup(qobject_cast<QDockWidget *>(panel->parentWidget()));
+	manager = new CherriesMultistream(main);
+}
+void CherriesAttachStreamSettings(QWidget *page)
+{
+	if (manager)
+		manager->Attach(page);
+}
+void CherriesDetachStreamSettings()
+{
+	if (manager)
+		manager->Detach();
+}
+bool CherriesStartSelectedStreams()
+{
+	return manager && manager->StartSelected();
+}
+bool CherriesHasSelectedStreams()
+{
+	return manager && manager->HasAccounts();
+}
+void CherriesManageBroadcast()
+{
+	if (manager)
+		manager->Manage();
+}
+
+void CherriesMultistream::Manage()
+{
+	if (preparing)
+		return;
+	ImportNative();
+	Account *twitch = nullptr, *youtube = nullptr;
+	auto choose = [&](bool wantTwitch) -> Account * {
+		QStringList names;
+		std::vector<Account *> matches;
+		for (auto &a : accounts) {
+			if (!a->connected || (dynamic_cast<TwitchAuth *>(a->auth.get()) != nullptr) != wantTwitch)
+				continue;
+			names << a->label;
+			matches.push_back(a.get());
+		}
+		if (matches.empty())
+			return nullptr;
+		if (matches.size() == 1)
+			return matches[0];
+		bool ok = false;
+		QString choice = QInputDialog::getItem(main, "Manage Broadcast",
+						       wantTwitch ? "Twitch account" : "YouTube account", names, 0,
+						       false, &ok);
+		return ok ? matches[names.indexOf(choice)] : nullptr;
+	};
+	twitch = choose(true);
+	youtube = choose(false);
+	QDialog window(main);
+	window.setWindowTitle("Manage Broadcast");
+	window.resize(950, 800);
+	auto layout = new QVBoxLayout(&window);
+	auto twitchPage = new QWidget;
+	auto twitchLayout = new QVBoxLayout(twitchPage);
+	QCefWidget *browser = nullptr;
+	if (twitch && cef) {
+		const QString hash = QString::fromLatin1(
+			QCryptographicHash::hash(twitch->id.toUtf8(), QCryptographicHash::Sha256).toHex());
+		if (!twitch->cookies)
+			twitch->cookies.reset(
+				cef->create_cookie_manager("cherries-twitch-" + hash.toStdString(), true));
+		twitchLayout->addWidget(
+			new QLabel("Twitch account: " + twitch->label +
+					   " — sign in to this account in the embedded page if prompted.",
+				   twitchPage));
+		browser = cef->create_widget(twitchPage,
+					     "https://dashboard.twitch.tv/popout/u/" +
+						     dynamic_cast<TwitchAuth *>(twitch->auth.get())->name +
+						     "/stream-manager/edit-stream-info",
+					     twitch->cookies.get());
+		if (browser)
+			twitchLayout->addWidget(browser);
+	} else
+		twitchLayout->addWidget(new QLabel(
+			"Connect a Twitch account in Settings → Stream to edit its stream info.", twitchPage));
+	if (youtube) {
+		OBSYoutubeActions editor(&window, youtube->auth.get(), false);
+		editor.setWindowFlags(Qt::Widget);
+		editor.SetCombinedPage(twitchPage);
+		layout->addWidget(new QLabel("YouTube account: " + youtube->label, &window));
+		layout->addWidget(&editor);
+		connect(&editor, &OBSYoutubeActions::rejected, &window, &QDialog::reject);
+		connect(&editor, &OBSYoutubeActions::ok, &window,
+			[&, youtube](const std::string &broadcast, const std::string &, const std::string &key,
+				     bool autostart, bool, bool) {
+				if (!autostart) {
+					QMessageBox::warning(
+						&window, "YouTube broadcast",
+						"Enable automatic start for this broadcast before using it with shared multistream.");
+					return;
+				}
+				youtube->broadcast = QString::fromStdString(broadcast);
+				youtube->server = "rtmps://a.rtmps.youtube.com/live2";
+				youtube->key = QString::fromStdString(key);
+				youtube->status = "Broadcast ready";
+				message->setText(
+					"YouTube broadcast ready. Use Start Streaming in Controls when you are ready to go live.");
+				Update();
+			});
+		window.exec();
+		if (browser)
+			browser->closeBrowser();
+		if (twitch && twitch->cookies)
+			twitch->cookies->FlushStore();
+	} else {
+		auto tabs = new QTabWidget(&window);
+		tabs->addTab(twitchPage, "Twitch Stream Info");
+		for (const QString &name :
+		     {QString("Create New YouTube Stream"), QString("Select Existing YouTube Stream")}) {
+			auto page = new QWidget(tabs);
+			auto body = new QVBoxLayout(page);
+			body->addWidget(new QLabel(
+				"Connect a YouTube account in Settings → Stream to manage broadcasts.", page));
+			tabs->addTab(page, name);
+		}
+		layout->addWidget(tabs);
+		auto buttons = new QDialogButtonBox(QDialogButtonBox::Close, &window);
+		connect(buttons, &QDialogButtonBox::rejected, &window, &QDialog::reject);
+		layout->addWidget(buttons);
+		window.exec();
+		if (browser)
+			browser->closeBrowser();
+		if (twitch && twitch->cookies)
+			twitch->cookies->FlushStore();
+	}
+	Save();
 }

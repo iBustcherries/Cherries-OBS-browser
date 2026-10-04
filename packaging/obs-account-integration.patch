@@ -35,6 +35,294 @@ index b48f845..4bb8f67 100644
 +    oauth/CherriesOAuth.cpp oauth/CherriesOAuth.hpp oauth/CherriesOAuthProtocol.hpp
 +    oauth/CherriesMultistream.cpp oauth/CherriesMultistream.hpp oauth/CherriesSharedOutput.hpp
  )
+diff --git a/frontend/dialogs/OBSYoutubeActions.cpp b/frontend/dialogs/OBSYoutubeActions.cpp
+index 0b4006f..9199843 100644
+--- a/frontend/dialogs/OBSYoutubeActions.cpp
++++ b/frontend/dialogs/OBSYoutubeActions.cpp
+@@ -10,6 +10,7 @@
+ #include <QImageReader>
+ #include <QStandardPaths>
+ #include <QToolTip>
++#include <QHeaderView>
+ 
+ #include "moc_OBSYoutubeActions.cpp"
+ 
+@@ -53,8 +54,7 @@ OBSYoutubeActions::OBSYoutubeActions(QWidget *parent, Auth *auth, bool broadcast
+ 		[](const QString &link) { QDesktopServices::openUrl(QUrl(link)); });
+ 
+ 	ui->scheduledTime->setVisible(false);
+-	connect(ui->checkScheduledLater, &QCheckBox::checkStateChanged, this, [&](Qt::CheckState state) {
+-		const bool checked = (state == Qt::Checked);
++	connect(ui->checkScheduledLater, &QCheckBox::toggled, this, [&](bool checked) {
+ 		ui->scheduledTime->setVisible(checked);
+ 		if (checked) {
+ 			ui->checkAutoStart->setVisible(true);
+@@ -151,6 +151,7 @@ OBSYoutubeActions::OBSYoutubeActions(QWidget *parent, Auth *auth, bool broadcast
+ 
+ 	// Add label indicating loading state
+ 	QLabel *loadingLabel = new QLabel();
++	loadingLabel->setObjectName("broadcastLoading");
+ 	loadingLabel->setTextFormat(Qt::RichText);
+ 	loadingLabel->setAlignment(Qt::AlignHCenter);
+ 	loadingLabel->setText(QString("<big>%1</big>").arg(QTStr("YouTube.Actions.EventsLoading")));
+@@ -158,8 +159,10 @@ OBSYoutubeActions::OBSYoutubeActions(QWidget *parent, Auth *auth, bool broadcast
+ 
+ 	// Delete "loading..." label on completion
+ 	connect(workerThread, &WorkerThread::finished, this, [&] {
+-		QLayoutItem *item = ui->scrollAreaWidgetContents->layout()->takeAt(0);
+-		item->widget()->deleteLater();
++		if (auto loading = ui->scrollAreaWidgetContents->findChild<QLabel *>("broadcastLoading")) {
++			loading->deleteLater();
++		}
++		UpdateOkButtonStatus();
+ 	});
+ 
+ 	connect(workerThread, &WorkerThread::failed, this, [&]() {
+@@ -173,12 +176,30 @@ OBSYoutubeActions::OBSYoutubeActions(QWidget *parent, Auth *auth, bool broadcast
+ 		}
+ 
+ 		ShowErrorDialog(this, last_error);
+-		QDialog::reject();
++		if (!combined) {
++			QDialog::reject();
++		}
+ 	});
+ 
+ 	connect(workerThread, &WorkerThread::new_item, this,
+ 		[&](const QString &title, const QString &dateTimeString, const QString &broadcast,
+-		    const QString &status, bool astart, bool astop) {
++		    const QString &status, bool astart, bool astop, const QString &privacy) {
++			if (combined && broadcastsTable) {
++				const int row = broadcastsTable->rowCount();
++				broadcastsTable->insertRow(row);
++				auto titleItem = new QTableWidgetItem(title);
++				titleItem->setData(Qt::UserRole, broadcast);
++				titleItem->setData(Qt::UserRole + 1, astart);
++				titleItem->setData(Qt::UserRole + 2, astop);
++				broadcastsTable->setItem(row, 0, titleItem);
++				broadcastsTable->setItem(row, 1, new QTableWidgetItem(dateTimeString));
++				broadcastsTable->setItem(row, 2, new QTableWidgetItem(privacy));
++				broadcastsTable->setItem(row, 3, new QTableWidgetItem(status));
++				if (selectedBroadcast == broadcast) {
++					broadcastsTable->selectRow(row);
++				}
++				return;
++			}
+ 			ClickableLabel *label = new ClickableLabel();
+ 			label->setTextFormat(Qt::RichText);
+ 
+@@ -247,6 +268,61 @@ OBSYoutubeActions::OBSYoutubeActions(QWidget *parent, Auth *auth, bool broadcast
+ 	valid = true;
+ }
+ 
++bool OBSYoutubeActions::IsCreateTab() const
++{
++	return ui->tabWidget->currentIndex() == (combined ? 1 : 0);
++}
++void OBSYoutubeActions::SetCombinedPage(QWidget *page)
++{
++	combined = true;
++	ui->tabWidget->insertTab(0, page, "Twitch Stream Info");
++	ui->tabWidget->setTabText(1, "Create New YouTube Stream");
++	ui->tabWidget->setTabText(2, "Select Existing YouTube Stream");
++	auto existingLayout = ui->scrollAreaWidgetContents->layout();
++	broadcastsTable = new QTableWidget(0, 4, ui->scrollAreaWidgetContents);
++	broadcastsTable->setHorizontalHeaderLabels({"Title", "Scheduled time", "Privacy", "Status"});
++	broadcastsTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
++	broadcastsTable->setSelectionBehavior(QAbstractItemView::SelectRows);
++	broadcastsTable->setSelectionMode(QAbstractItemView::SingleSelection);
++	broadcastsTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
++	broadcastsTable->setMinimumHeight(250);
++	existingLayout->addWidget(broadcastsTable);
++	broadcastDetails = new QLabel("Select a broadcast to use for your stream.", ui->scrollAreaWidgetContents);
++	broadcastDetails->setTextFormat(Qt::PlainText);
++	broadcastDetails->setWordWrap(true);
++	existingLayout->addWidget(broadcastDetails);
++	auto refresh = new QPushButton("Refresh", ui->scrollAreaWidgetContents);
++	existingLayout->addWidget(refresh);
++	connect(refresh, &QPushButton::clicked, this, [this]() {
++		if (workerThread->isRunning()) {
++			return;
++		}
++		broadcastsTable->setRowCount(0);
++		selectedBroadcast.clear();
++		broadcastDetails->setText("Loading broadcasts…");
++		workerThread->reset();
++		workerThread->start();
++		UpdateOkButtonStatus();
++	});
++	connect(broadcastsTable, &QTableWidget::itemSelectionChanged, this, [this]() {
++		int row = broadcastsTable->currentRow();
++		if (row < 0 || !broadcastsTable->item(row, 0)) {
++			return;
++		}
++		auto item = broadcastsTable->item(row, 0);
++		selectedBroadcast = item->data(Qt::UserRole).toString();
++		autostart = item->data(Qt::UserRole + 1).toBool();
++		autostop = item->data(Qt::UserRole + 2).toBool();
++		broadcastDetails->setText("Selected broadcast: " + item->text() +
++					  "\nScheduled: " + broadcastsTable->item(row, 1)->text() +
++					  "\nPrivacy: " + broadcastsTable->item(row, 2)->text());
++		UpdateOkButtonStatus();
++	});
++	ui->cancelButton->setText("Close");
++	ui->tabWidget->setCurrentIndex(0);
++	UpdateOkButtonStatus();
++}
++
+ void OBSYoutubeActions::showEvent(QShowEvent *event)
+ {
+ 	QDialog::showEvent(event);
+@@ -305,16 +381,14 @@ void WorkerThread::run()
+ 					      item["contentDetails"]["enableAutoStart"].bool_value();
+ 				bool astop = item["contentDetails"]["enableAutoStop"].bool_value();
+ 
+-				QDateTime utcDTime =
+-					QDateTime::fromString(scheduledStartTime, SchedulDateAndTimeFormat);
+-				// DateTime parser means that input datetime is a local, so we need to move it
+-				QDateTime dateTime = utcDTime.addSecs(utcDTime.offsetFromUtc());
+-
+-				QString dateTimeString = QLocale().toString(
+-					dateTime, QString("%1  %2").arg(QLocale().dateFormat(QLocale::LongFormat),
+-									QLocale().timeFormat(QLocale::ShortFormat)));
++				QDateTime dateTime =
++					QDateTime::fromString(scheduledStartTime, Qt::ISODate).toLocalTime();
++				QString dateTimeString = dateTime.isValid()
++								 ? QLocale().toString(dateTime, QLocale::ShortFormat)
++								 : "Not scheduled";
+ 
+-				emit new_item(title, dateTimeString, broadcast, status, astart, astop);
++				emit new_item(title, dateTimeString, broadcast, status, astart, astop,
++					      QString::fromStdString(item["status"]["privacyStatus"].string_value()));
+ 			}
+ 
+ 			auto nextPageToken = broadcasts["nextPageToken"].string_value();
+@@ -340,7 +414,7 @@ void OBSYoutubeActions::UpdateOkButtonStatus()
+ {
+ 	bool enable = false;
+ 
+-	if (ui->tabWidget->currentIndex() == 0) {
++	if (IsCreateTab()) {
+ 		enable = !ui->title->text().isEmpty() && !ui->privacyBox->currentText().isEmpty() &&
+ 			 (ui->yesMakeForKids->isChecked() || ui->notMakeForKids->isChecked());
+ 		ui->okButton->setEnabled(enable);
+@@ -363,6 +437,14 @@ void OBSYoutubeActions::UpdateOkButtonStatus()
+ 
+ 		ui->pushButton->setVisible(true);
+ 	}
++	if (combined) {
++		bool twitch = ui->tabWidget->currentIndex() == 0;
++		ui->saveButton->setVisible(false);
++		ui->okButton->setVisible(!twitch);
++		ui->okButton->setEnabled(!twitch && enable && !workerThread->isRunning());
++		ui->pushButton->setVisible(false);
++		ui->okButton->setText(IsCreateTab() ? "Create broadcast" : "Use selected broadcast");
++	}
+ }
+ bool OBSYoutubeActions::CreateEventAction(YoutubeApiWrappers *api, BroadcastDescription &broadcast,
+ 					  StreamDescription &stream, bool stream_later, bool ready_broadcast)
+@@ -503,7 +585,7 @@ void OBSYoutubeActions::InitBroadcast()
+ 
+ 	bool success = false;
+ 	auto action = [&]() {
+-		if (ui->tabWidget->currentIndex() == 0) {
++		if (IsCreateTab()) {
+ 			success = this->CreateEventAction(apiYouTube, broadcast, stream,
+ 							  ui->checkScheduledLater->isChecked());
+ 		} else {
+@@ -520,7 +602,7 @@ void OBSYoutubeActions::InitBroadcast()
+ 	thread->wait();
+ 
+ 	if (success) {
+-		if (ui->tabWidget->currentIndex() == 0) {
++		if (IsCreateTab()) {
+ 			// Stream later usecase.
+ 			if (ui->checkScheduledLater->isChecked()) {
+ 				QMessageBox msg(this);
+@@ -532,7 +614,7 @@ void OBSYoutubeActions::InitBroadcast()
+ 				Cancel();
+ 			} else {
+ 				// Stream now usecase.
+-				blog(LOG_DEBUG, "New valid stream: %s", QT_TO_UTF8(stream.name));
++				blog(LOG_DEBUG, "New broadcast prepared.");
+ 				emit ok(broadcast.id.toStdString(), stream.id.toStdString(), stream.name.toStdString(),
+ 					true, true, true);
+ 				Accept();
+@@ -569,7 +651,7 @@ void OBSYoutubeActions::ReadyBroadcast()
+ 
+ 	bool success = false;
+ 	auto action = [&]() {
+-		if (ui->tabWidget->currentIndex() == 0) {
++		if (IsCreateTab()) {
+ 			success = this->CreateEventAction(apiYouTube, broadcast, stream,
+ 							  ui->checkScheduledLater->isChecked(), true);
+ 		} else {
+@@ -736,6 +818,11 @@ void OBSYoutubeActions::Cancel()
+ }
+ void OBSYoutubeActions::Accept()
+ {
++	if (combined) {
++		QMessageBox::information(this, "Manage Broadcast",
++					 "Broadcast prepared. Use Start Streaming in Controls when you are ready.");
++		return;
++	}
+ 	workerThread->stop();
+ 	accept();
+ }
+diff --git a/frontend/dialogs/OBSYoutubeActions.hpp b/frontend/dialogs/OBSYoutubeActions.hpp
+index 6d4ca31..271cd4f 100644
+--- a/frontend/dialogs/OBSYoutubeActions.hpp
++++ b/frontend/dialogs/OBSYoutubeActions.hpp
+@@ -5,6 +5,9 @@
+ #include <utility/YoutubeApiWrappers.hpp>
+ 
+ #include <QThread>
++#include <QTableWidget>
++#include <QLabel>
++#include <atomic>
+ 
+ class WorkerThread : public QThread {
+ 	Q_OBJECT
+@@ -12,17 +15,18 @@ public:
+ 	WorkerThread(YoutubeApiWrappers *api) : QThread(), apiYouTube(api) {}
+ 
+ 	void stop() { pending = false; }
++	void reset() { pending = true; }
+ 
+ protected:
+ 	YoutubeApiWrappers *apiYouTube;
+-	bool pending = true;
++	std::atomic<bool> pending{true};
+ 
+ public slots:
+ 	void run() override;
+ signals:
+ 	void ready();
+ 	void new_item(const QString &title, const QString &dateTimeString, const QString &broadcast,
+-		      const QString &status, bool astart, bool astop);
++		      const QString &status, bool astart, bool astop, const QString &privacy);
+ 	void failed();
+ };
+ 
+@@ -51,6 +55,7 @@ public:
+ 	virtual ~OBSYoutubeActions() override;
+ 
+ 	bool Valid() { return valid; };
++	void SetCombinedPage(QWidget *page);
+ 
+ private:
+ 	void InitBroadcast();
+@@ -71,6 +76,10 @@ private:
+ 	YoutubeApiWrappers *apiYouTube;
+ 	WorkerThread *workerThread = nullptr;
+ 	bool broadcastReady = false;
++	bool combined = false;
++	QTableWidget *broadcastsTable = nullptr;
++	QLabel *broadcastDetails = nullptr;
++	bool IsCreateTab() const;
+ 	QString thumbnailFile;
+ 	QIcon thumbPlaceholder;
+ };
 diff --git a/frontend/oauth/AuthListener.cpp b/frontend/oauth/AuthListener.cpp
 index 1c955cc..d8d37ac 100644
 --- a/frontend/oauth/AuthListener.cpp
@@ -293,7 +581,7 @@ index 46bd720..0dd9760 100644
  protected:
  	std::string key_;
 diff --git a/frontend/oauth/TwitchAuth.cpp b/frontend/oauth/TwitchAuth.cpp
-index beee869..a0fb80c 100644
+index beee869..4663b2d 100644
 --- a/frontend/oauth/TwitchAuth.cpp
 +++ b/frontend/oauth/TwitchAuth.cpp
 @@ -1,4 +1,5 @@
@@ -364,7 +652,34 @@ index beee869..a0fb80c 100644
  	config_set_string(main->Config(), service(), "Name", name.c_str());
  	config_set_string(main->Config(), service(), "UUID", uuid.c_str());
  
-@@ -452,39 +465,21 @@ void TwitchAuth::TryLoadSecondaryUIPanes()
+@@ -207,6 +220,26 @@ static const char *referrer_script1 = "\
+ Object.defineProperty(document, 'referrer', {get : function() { return '";
+ static const char *referrer_script2 = "'; }});";
+ 
++void CherriesRefreshTwitchAddons()
++{
++	auto main = OBSBasic::Get();
++	const int choice = config_get_int(main->Config(), "Twitch", "AddonChoice");
++	std::string script = App()->IsThemeDark() ? "localStorage.setItem('twilight.theme', 1);"
++						  : "localStorage.setItem('twilight.theme', 0);";
++	if (choice & 1) {
++		script += bttv_script;
++	}
++	if (choice & 2) {
++		script += ffz_script;
++	}
++	if (auto dock = main->findChild<BrowserDock *>(TWITCH_CHAT_DOCK_NAME)) {
++		if (auto browser = dock->findChild<QCefWidget *>()) {
++			browser->setStartupScript(script);
++			browser->reloadPage();
++		}
++	}
++}
++
+ void TwitchAuth::LoadUI()
+ {
+ 	if (!cef) {
+@@ -452,39 +485,21 @@ void TwitchAuth::TryLoadSecondaryUIPanes()
  
  bool TwitchAuth::RetryLogin()
  {
@@ -387,11 +702,8 @@ index beee869..a0fb80c 100644
  {
 -	OAuthLogin login(parent, TWITCH_AUTH_URL, false);
 -	if (login.exec() == QDialog::Rejected) {
-+	auto auth = std::make_shared<TwitchAuth>(twitchDef);
-+	auth->clientId = CherriesTwitchClient(parent, true);
-+	if (!CherriesTwitchLogin(parent, auth->clientId, auth->token, auth->refresh_token, auth->expire_time)) {
- 		return nullptr;
- 	}
+-		return nullptr;
+-	}
 -
 -	std::shared_ptr<TwitchAuth> auth = std::make_shared<TwitchAuth>(twitchDef);
 -
@@ -399,8 +711,11 @@ index beee869..a0fb80c 100644
 -	deobfuscate_str(&client_id[0], TWITCH_HASH);
 -
 -	if (!auth->GetToken(TWITCH_TOKEN_URL, client_id, TWITCH_SCOPE_VERSION, QT_TO_UTF8(login.GetCode()))) {
--		return nullptr;
--	}
++	auto auth = std::make_shared<TwitchAuth>(twitchDef);
++	auth->clientId = CherriesTwitchClient(parent, true);
++	if (!CherriesTwitchLogin(parent, auth->clientId, auth->token, auth->refresh_token, auth->expire_time)) {
+ 		return nullptr;
+ 	}
 -
 -	if (auth->GetChannelInfo()) {
 -		return auth;
@@ -412,7 +727,7 @@ index beee869..a0fb80c 100644
  }
  
  static std::shared_ptr<Auth> CreateTwitchAuth()
-@@ -501,11 +496,5 @@ static void DeleteCookies()
+@@ -501,11 +516,5 @@ static void DeleteCookies()
  
  void RegisterTwitchAuth()
  {
@@ -425,7 +740,7 @@ index beee869..a0fb80c 100644
  	OAuth::RegisterOAuth(twitchDef, CreateTwitchAuth, TwitchAuth::Login, DeleteCookies);
  }
 diff --git a/frontend/oauth/TwitchAuth.hpp b/frontend/oauth/TwitchAuth.hpp
-index bbd8ca4..4298ebd 100644
+index bbd8ca4..970a61c 100644
 --- a/frontend/oauth/TwitchAuth.hpp
 +++ b/frontend/oauth/TwitchAuth.hpp
 @@ -8,9 +8,12 @@
@@ -441,6 +756,12 @@ index bbd8ca4..4298ebd 100644
  	std::string name;
  	std::string uuid;
  
+@@ -36,3 +39,5 @@ public slots:
+ 	void TryLoadSecondaryUIPanes();
+ 	void LoadSecondaryUIPanes();
+ };
++
++void CherriesRefreshTwitchAddons();
 diff --git a/frontend/oauth/YoutubeAuth.cpp b/frontend/oauth/YoutubeAuth.cpp
 index 415e5ad..539a27d 100644
 --- a/frontend/oauth/YoutubeAuth.cpp
@@ -565,6 +886,61 @@ index cecc5f2..831101c 100644
  #ifdef BROWSER_AVAILABLE
  	YoutubeChatDock *chat = nullptr;
  #endif
+diff --git a/frontend/settings/OBSBasicSettings.cpp b/frontend/settings/OBSBasicSettings.cpp
+index 1a48514..f4966bd 100644
+--- a/frontend/settings/OBSBasicSettings.cpp
++++ b/frontend/settings/OBSBasicSettings.cpp
+@@ -17,6 +17,7 @@
+  ******************************************************************************/
+ 
+ #include "OBSBasicSettings.hpp"
++#include <oauth/CherriesMultistream.hpp>
+ #include "OBSHotkeyLabel.hpp"
+ #include "OBSHotkeyWidget.hpp"
+ 
+@@ -850,6 +851,7 @@ OBSBasicSettings::OBSBasicSettings(QWidget *parent)
+ 	InitStreamPage();
+ 	InitAppearancePage();
+ 	LoadSettings(false);
++	CherriesAttachStreamSettings(ui->streamPage);
+ 
+ 	ui->advOutTrack1->setAccessibleName(QTStr("Basic.Settings.Output.Adv.Audio.Track1"));
+ 	ui->advOutTrack2->setAccessibleName(QTStr("Basic.Settings.Output.Adv.Audio.Track2"));
+@@ -938,6 +940,7 @@ OBSBasicSettings::OBSBasicSettings(QWidget *parent)
+ 
+ OBSBasicSettings::~OBSBasicSettings()
+ {
++	CherriesDetachStreamSettings();
+ 	delete ui->filenameFormatting->completer();
+ 	main->EnableOutputs(true);
+ 
+diff --git a/frontend/settings/OBSBasicSettings.hpp b/frontend/settings/OBSBasicSettings.hpp
+index 0922880..d2d0c35 100644
+--- a/frontend/settings/OBSBasicSettings.hpp
++++ b/frontend/settings/OBSBasicSettings.hpp
+@@ -38,6 +38,7 @@ struct OBSTheme;
+ std::string DeserializeConfigText(const char *value);
+ 
+ class OBSBasicSettings : public QDialog {
++	friend class CherriesMultistream;
+ 	Q_OBJECT
+ 	Q_PROPERTY(QIcon generalIcon READ GetGeneralIcon WRITE SetGeneralIcon DESIGNABLE true)
+ 	Q_PROPERTY(QIcon appearanceIcon READ GetAppearanceIcon WRITE SetAppearanceIcon DESIGNABLE true)
+diff --git a/frontend/settings/OBSBasicSettings_Stream.cpp b/frontend/settings/OBSBasicSettings_Stream.cpp
+index 1307e26..ff8d0fb 100644
+--- a/frontend/settings/OBSBasicSettings_Stream.cpp
++++ b/frontend/settings/OBSBasicSettings_Stream.cpp
+@@ -828,8 +828,8 @@ void OBSBasicSettings::OnOAuthStreamKeyConnected()
+ 
+ 		if (strcmp(a->service(), "Twitch") == 0) {
+ 			ui->bandwidthTestEnable->setVisible(true);
+-			ui->twitchAddonLabel->setVisible(true);
+-			ui->twitchAddonDropdown->setVisible(true);
++			ui->twitchAddonLabel->setVisible(false);
++			ui->twitchAddonDropdown->setVisible(false);
+ 		} else {
+ 			ui->bandwidthTestEnable->setChecked(false);
+ 		}
 diff --git a/frontend/utility/BasicOutputHandler.cpp b/frontend/utility/BasicOutputHandler.cpp
 index 74cd06e..dbd0649 100644
 --- a/frontend/utility/BasicOutputHandler.cpp
@@ -635,19 +1011,125 @@ index 571de9f..2b78886 100644
  	Q_PROPERTY(QIcon imageIcon READ GetImageIcon WRITE SetImageIcon DESIGNABLE true)
  	Q_PROPERTY(QIcon colorIcon READ GetColorIcon WRITE SetColorIcon DESIGNABLE true)
  	Q_PROPERTY(QIcon slideshowIcon READ GetSlideshowIcon WRITE SetSlideshowIcon DESIGNABLE true)
+diff --git a/frontend/widgets/OBSBasicControls.cpp b/frontend/widgets/OBSBasicControls.cpp
+index 81d8ad8..40e40de 100644
+--- a/frontend/widgets/OBSBasicControls.cpp
++++ b/frontend/widgets/OBSBasicControls.cpp
+@@ -8,6 +8,12 @@ OBSBasicControls::OBSBasicControls(OBSBasic *main) : QFrame(nullptr), ui(new Ui:
+ {
+ 	/* Create UI elements */
+ 	ui->setupUi(this);
++	ui->horizontalLayout_7->removeWidget(ui->streamButton);
++	ui->horizontalLayout_7->removeWidget(ui->broadcastButton);
++	ui->buttonsVLayout->removeItem(ui->horizontalLayout_7);
++	ui->buttonsVLayout->insertWidget(0, ui->broadcastButton);
++	ui->buttonsVLayout->insertWidget(1, ui->streamButton);
++	ui->broadcastButton->setText("Manage Broadcast");
+ 
+ 	streamButtonMenu.reset(new QMenu());
+ 	startStreamAction = streamButtonMenu->addAction(QTStr("Basic.Main.StartStreaming"));
+@@ -58,7 +64,7 @@ OBSBasicControls::OBSBasicControls(OBSBasic *main) : QFrame(nullptr), ui(new Ui:
+ 		[this]() { emit this->ForceStopStreamMenuActionClicked(); }, Qt::DirectConnection);
+ 
+ 	/* Set up default visibility */
+-	ui->broadcastButton->setVisible(false);
++	ui->broadcastButton->setVisible(true);
+ 	ui->pauseRecordButton->setVisible(false);
+ 	ui->replayBufferButton->setVisible(false);
+ 	ui->saveReplayButton->setVisible(false);
+@@ -106,17 +112,6 @@ void OBSBasicControls::StreamingPreparing()
+ void OBSBasicControls::StreamingStarting(bool broadcastAutoStart)
+ {
+ 	ui->streamButton->setText(QTStr("Basic.Main.Connecting"));
+-
+-	if (!broadcastAutoStart) {
+-		// well, we need to disable button while stream is not active
+-		ui->broadcastButton->setEnabled(false);
+-
+-		ui->broadcastButton->setText(QTStr("Basic.Main.StartBroadcast"));
+-
+-		ui->broadcastButton->setProperty("broadcastState", "ready");
+-		ui->broadcastButton->style()->unpolish(ui->broadcastButton);
+-		ui->broadcastButton->style()->polish(ui->broadcastButton);
+-	}
+ }
+ 
+ void OBSBasicControls::StreamingStarted(bool withDelay)
+@@ -157,24 +152,23 @@ void OBSBasicControls::StreamingStopped(bool withDelay)
+ 
+ void OBSBasicControls::BroadcastStreamReady(bool ready)
+ {
+-	setClasses(ui->broadcastButton, ready ? "state-active" : "");
++	ui->broadcastButton->setVisible(true);
++	ui->broadcastButton->setEnabled(true);
++	ui->broadcastButton->setText("Manage Broadcast");
+ }
+ 
+ void OBSBasicControls::BroadcastStreamActive()
+ {
++	ui->broadcastButton->setVisible(true);
+ 	ui->broadcastButton->setEnabled(true);
++	ui->broadcastButton->setText("Manage Broadcast");
+ }
+ 
+ void OBSBasicControls::BroadcastStreamStarted(bool autoStop)
+ {
+-	ui->broadcastButton->setText(QTStr(autoStop ? "Basic.Main.AutoStopEnabled" : "Basic.Main.StopBroadcast"));
+-	if (autoStop) {
+-		ui->broadcastButton->setEnabled(false);
+-	}
+-
+-	ui->broadcastButton->setProperty("broadcastState", "active");
+-	ui->broadcastButton->style()->unpolish(ui->broadcastButton);
+-	ui->broadcastButton->style()->polish(ui->broadcastButton);
++	ui->broadcastButton->setVisible(true);
++	ui->broadcastButton->setEnabled(true);
++	ui->broadcastButton->setText("Manage Broadcast");
+ }
+ 
+ void OBSBasicControls::RecordingStarted(bool pausable)
+@@ -263,14 +257,9 @@ void OBSBasicControls::UpdateStudioModeState(bool enabled)
+ 
+ void OBSBasicControls::EnableBroadcastFlow(bool enabled)
+ {
+-	ui->broadcastButton->setVisible(enabled);
+-	ui->broadcastButton->setEnabled(enabled);
+-
+-	ui->broadcastButton->setText(QTStr("Basic.Main.SetupBroadcast"));
+-
+-	ui->broadcastButton->setProperty("broadcastState", "idle");
+-	ui->broadcastButton->style()->unpolish(ui->broadcastButton);
+-	ui->broadcastButton->style()->polish(ui->broadcastButton);
++	ui->broadcastButton->setVisible(true);
++	ui->broadcastButton->setEnabled(true);
++	ui->broadcastButton->setText("Manage Broadcast");
+ }
+ 
+ void OBSBasicControls::EnableReplayBufferButtons(bool enabled)
 diff --git a/frontend/widgets/OBSBasic_Streaming.cpp b/frontend/widgets/OBSBasic_Streaming.cpp
-index bd6deb5..810a855 100644
+index bd6deb5..e929bec 100644
 --- a/frontend/widgets/OBSBasic_Streaming.cpp
 +++ b/frontend/widgets/OBSBasic_Streaming.cpp
-@@ -18,6 +18,7 @@
+@@ -18,6 +18,8 @@
  ******************************************************************************/
  
  #include "OBSBasic.hpp"
 +#include <oauth/CherriesSharedOutput.hpp>
++#include <oauth/CherriesMultistream.hpp>
  
  #include <components/UIValidation.hpp>
  #ifdef YOUTUBE_ENABLED
-@@ -80,12 +81,23 @@ void OBSBasic::StartStreaming()
+@@ -47,6 +49,9 @@ void OBSBasic::DisplayStreamStartError()
+ 
+ void OBSBasic::StartStreaming()
+ {
++	if (!disableOutputsRef && !outputHandler->StreamingActive() && CherriesStartSelectedStreams()) {
++		return;
++	}
+ 	if (outputHandler->StreamingActive()) {
+ 		return;
+ 	}
+@@ -80,12 +85,23 @@ void OBSBasic::StartStreaming()
  		sysTrayStream->setText("Basic.Main.PreparingStream");
  	}
  
@@ -672,3 +1154,36 @@ index bd6deb5..810a855 100644
  		OnEvent(OBS_FRONTEND_EVENT_STREAMING_STARTING);
  
  		SaveProject();
+@@ -422,6 +438,11 @@ void OBSBasic::StreamActionTriggered()
+ 			return;
+ 		}
+ 
++		if (CherriesHasSelectedStreams()) {
++			StartStreaming();
++			return;
++		}
++
+ 		Auth *auth = GetAuth();
+ 
+ 		auto action = (auth && auth->external()) ? StreamSettingsAction::ContinueStream
+diff --git a/frontend/widgets/OBSBasic_YouTube.cpp b/frontend/widgets/OBSBasic_YouTube.cpp
+index ffd9b95..ec6e0fb 100644
+--- a/frontend/widgets/OBSBasic_YouTube.cpp
++++ b/frontend/widgets/OBSBasic_YouTube.cpp
+@@ -18,6 +18,7 @@
+ ******************************************************************************/
+ 
+ #include "OBSBasic.hpp"
++#include <oauth/CherriesMultistream.hpp>
+ 
+ #ifdef YOUTUBE_ENABLED
+ #include <dialogs/OBSYoutubeActions.hpp>
+@@ -126,6 +127,8 @@ void OBSBasic::ShowYouTubeAutoStartWarning()
+ 
+ void OBSBasic::BroadcastButtonClicked()
+ {
++	CherriesManageBroadcast();
++	return;
+ 	if (!broadcastReady || (!broadcastActive && !outputHandler->StreamingActive())) {
+ 		SetupBroadcast();
+ 		return;
