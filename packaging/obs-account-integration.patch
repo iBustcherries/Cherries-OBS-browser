@@ -565,6 +565,27 @@ index cecc5f2..831101c 100644
  #ifdef BROWSER_AVAILABLE
  	YoutubeChatDock *chat = nullptr;
  #endif
+diff --git a/frontend/utility/BasicOutputHandler.cpp b/frontend/utility/BasicOutputHandler.cpp
+index 74cd06e..dbd0649 100644
+--- a/frontend/utility/BasicOutputHandler.cpp
++++ b/frontend/utility/BasicOutputHandler.cpp
+@@ -458,7 +458,15 @@ std::shared_future<void> BasicOutputHandler::SetupMultitrackVideo(obs_service_t
+ 								  std::function<void(std::optional<bool>)> continuation)
+ {
+ 	auto start_streaming_guard = std::make_shared<StartMultitrackVideoStreamingGuard>();
+-	if (!multitrackVideo) {
++	OBSDataAutoRelease cherriesSettings = obs_service_get_settings(service);
++	const bool sharedMultistream = obs_data_get_bool(cherriesSettings, "cherries_multistream");
++	if (sharedMultistream) {
++		if (multitrackVideoActive) {
++			outputType.clear();
++		}
++		multitrackVideoActive = false;
++	}
++	if (!multitrackVideo || sharedMultistream) {
+ 		continuation(std::nullopt);
+ 		return start_streaming_guard->GetFuture();
+ 	}
 diff --git a/frontend/utility/YoutubeApiWrappers.cpp b/frontend/utility/YoutubeApiWrappers.cpp
 index 731a88c..4ba3342 100644
 --- a/frontend/utility/YoutubeApiWrappers.cpp
@@ -615,10 +636,18 @@ index 571de9f..2b78886 100644
  	Q_PROPERTY(QIcon colorIcon READ GetColorIcon WRITE SetColorIcon DESIGNABLE true)
  	Q_PROPERTY(QIcon slideshowIcon READ GetSlideshowIcon WRITE SetSlideshowIcon DESIGNABLE true)
 diff --git a/frontend/widgets/OBSBasic_Streaming.cpp b/frontend/widgets/OBSBasic_Streaming.cpp
-index bd6deb5..b65bef2 100644
+index bd6deb5..810a855 100644
 --- a/frontend/widgets/OBSBasic_Streaming.cpp
 +++ b/frontend/widgets/OBSBasic_Streaming.cpp
-@@ -80,7 +80,10 @@ void OBSBasic::StartStreaming()
+@@ -18,6 +18,7 @@
+ ******************************************************************************/
+ 
+ #include "OBSBasic.hpp"
++#include <oauth/CherriesSharedOutput.hpp>
+ 
+ #include <components/UIValidation.hpp>
+ #ifdef YOUTUBE_ENABLED
+@@ -80,12 +81,23 @@ void OBSBasic::StartStreaming()
  		sysTrayStream->setText("Basic.Main.PreparingStream");
  	}
  
@@ -630,3 +659,16 @@ index bd6deb5..b65bef2 100644
  		if (!setupStreamingResult) {
  			DisplayStreamStartError();
  			return;
+ 		}
+ 
++		OBSDataAutoRelease serviceSettings = obs_service_get_settings(service);
++		if (obs_data_get_bool(serviceSettings, "cherries_multistream") &&
++		    !CherriesCanShareOutput(outputHandler->StreamingOutput())) {
++			outputHandler->lastError = "Use H.264 video and AAC audio for shared multistream encoding.";
++			DisplayStreamStartError();
++			return;
++		}
++
+ 		OnEvent(OBS_FRONTEND_EVENT_STREAMING_STARTING);
+ 
+ 		SaveProject();

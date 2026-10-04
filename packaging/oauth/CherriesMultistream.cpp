@@ -6,6 +6,7 @@
 #include <dialogs/OBSYoutubeActions.hpp>
 #include <utility/YoutubeApiWrappers.hpp>
 #include <widgets/OBSBasic.hpp>
+#include <qt-wrappers.hpp>
 #include <obs-frontend-api.h>
 #include <QCheckBox>
 #include <QDir>
@@ -205,6 +206,7 @@ class CherriesMultistream : public QWidget {
 	{
 		startup.stop();
 		if (previousService) {
+			const bool canceled = preparing && !obs_frontend_streaming_active();
 			main->SetService(previousService);
 			previousService = nullptr;
 			main->auth = previousAuth;
@@ -214,6 +216,13 @@ class CherriesMultistream : public QWidget {
 			main->broadcastReady = previousBroadcastReady;
 			main->broadcastActive = previousBroadcastActive;
 			main->SetBroadcastFlowEnabled(main->auth && main->auth->broadcastFlow());
+			if (canceled) {
+				main->StreamingStopped();
+				if (main->sysTrayStream) {
+					main->sysTrayStream->setText(QTStr("Basic.Main.StartStreaming"));
+					main->sysTrayStream->setEnabled(true);
+				}
+			}
 		}
 		primary = nullptr;
 		running = false;
@@ -293,6 +302,7 @@ class CherriesMultistream : public QWidget {
 		OBSDataAutoRelease settings = obs_data_create();
 		obs_data_set_string(settings, "server", primary->server.toUtf8().constData());
 		obs_data_set_string(settings, "key", primary->key.toUtf8().constData());
+		obs_data_set_bool(settings, "cherries_multistream", true);
 		OBSServiceAutoRelease service =
 			obs_service_create("rtmp_custom", "Cherries primary", settings, nullptr);
 		if (!service) {
@@ -447,6 +457,12 @@ public:
 				main->ForceStopStreaming();
 			else
 				Restore();
+		});
+		connect(main, &OBSBasic::StreamingStopped, this, [this]() {
+			if (preparing && previousService && !obs_frontend_streaming_active()) {
+				preparing = false;
+				Restore();
+			}
 		});
 		startup.setSingleShot(true);
 		connect(&startup, &QTimer::timeout, this, [this]() {
