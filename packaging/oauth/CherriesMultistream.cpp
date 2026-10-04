@@ -387,7 +387,7 @@ class CherriesMultistream : public QWidget {
 	}
 
 public:
-	explicit CherriesMultistream(OBSBasic *main) : QWidget(main), main(main)
+	explicit CherriesMultistream(OBSBasic *obsMain) : QWidget(obsMain), main(obsMain)
 	{
 		auto layout = new QVBoxLayout(this);
 		message = new QLabel("Select accounts and start one shared stream to Twitch and YouTube.", this);

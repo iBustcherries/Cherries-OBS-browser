@@ -183,7 +183,8 @@ bool CherriesTwitchLogin(QWidget *parent, const std::string &client, std::string
 						      {"scopes", scopes}};
 		if (!initial) {
 			fields.append({"device_code", device});
-			fields.append({"grant_type", "urn:ietf:params:oauth:grant-type:device_code"});
+			fields.append(
+				QPair<QString, QString>{"grant_type", "urn:ietf:params:oauth:grant-type:device_code"});
 		}
 		auto reply = manager.post(request, Form(fields));
 		QObject::connect(&dialog, &QDialog::finished, reply, [reply]() { reply->abort(); });
