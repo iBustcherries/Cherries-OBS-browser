@@ -2,8 +2,9 @@
 
 Status: initial implementation. Local syntax checks pass against CEF 7871,
 Qt 6.4.2 and OBS 30 development headers, with and without ENABLE_WAYLAND.
-Full pinned-OBS compilation and real compositor testing are pending.
-This branch is not a validated Fedora RPM release.
+Full pinned-OBS/CEF compilation passes on Ubuntu and Fedora 44. The Fedora
+RPM also passes installation and executable loader checks (`--version`).
+Real compositor testing is pending; this is an experimental test package.
 The Fedora 44 workflow builds a separate experimental RPM under
 `/opt/cherries-obs`, with a `cherries-obs-wayland` launcher and its own
 configuration directory. The RPM includes x264 support and therefore uses
@@ -22,8 +23,9 @@ The GitHub Actions workflow builds a pinned OBS source revision
 `cffa83ba552f1ef6a0a05851c3aa07b3811d7e58` with this fork. It uses that OBS
 revision's CEF 7871 Linux distribution and checksum, and uploads an Ubuntu
 build archive only after the full build succeeds. That archive is not a
-Fedora package. Building the RPM and checking Fedora library compatibility
-are separate work, after compilation and compositor testing.
+Fedora package. The separate Fedora workflow builds and installs the RPM
+and runs an executable loader check. These CI checks do not exercise the
+Wayland UI or browser docks.
 
 For a local OBS source checkout with its dependencies and CEF already set up:
 
@@ -89,3 +91,4 @@ installation for initial testing.
 Record the OBS commit, CEF version, Qt version, Fedora version, graphics
 driver, and compositor with each test result. A successful CI compilation
 does not replace these checks.
+
