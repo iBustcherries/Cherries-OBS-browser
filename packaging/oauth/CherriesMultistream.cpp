@@ -8,6 +8,7 @@
 #include <widgets/OBSBasic.hpp>
 #include <qt-wrappers.hpp>
 #include <obs-frontend-api.h>
+#include <browser-panel-dock.hpp>
 #include <QCheckBox>
 #include <QDir>
 #include <QFile>
@@ -524,4 +525,6 @@ void CherriesInstallMultistream(OBSBasic *main)
 	auto panel = new CherriesMultistream(main);
 	if (!obs_frontend_add_dock_by_id("cherriesMultistream", "Accounts & Multistream", panel))
 		delete panel;
+	else if (QApplication::platformName().contains("wayland"))
+		InstallWaylandDockDragCleanup(qobject_cast<QDockWidget *>(panel->parentWidget()));
 }
