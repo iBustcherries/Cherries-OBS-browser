@@ -1,0 +1,632 @@
+diff --git a/frontend/cmake/feature-twitch.cmake b/frontend/cmake/feature-twitch.cmake
+index 663c48e..b725d17 100644
+--- a/frontend/cmake/feature-twitch.cmake
++++ b/frontend/cmake/feature-twitch.cmake
+@@ -1,4 +1,4 @@
+-if(TWITCH_CLIENTID AND TWITCH_HASH MATCHES "^(0|[a-fA-F0-9]+)$" AND TARGET OBS::browser-panels)
++if(TARGET OBS::browser-panels)
+   target_sources(obs-studio PRIVATE oauth/TwitchAuth.cpp oauth/TwitchAuth.hpp)
+   target_enable_feature(obs-studio "Twitch API connection" TWITCH_ENABLED)
+ else()
+diff --git a/frontend/cmake/feature-youtube.cmake b/frontend/cmake/feature-youtube.cmake
+index be87b50..3c92b93 100644
+--- a/frontend/cmake/feature-youtube.cmake
++++ b/frontend/cmake/feature-youtube.cmake
+@@ -1,10 +1,4 @@
+-if(
+-  YOUTUBE_CLIENTID
+-  AND YOUTUBE_SECRET
+-  AND YOUTUBE_CLIENTID_HASH MATCHES "^(0|[a-fA-F0-9]+)$"
+-  AND YOUTUBE_SECRET_HASH MATCHES "^(0|[a-fA-F0-9]+)$"
+-  AND TARGET OBS::browser-panels
+-)
++if(TARGET OBS::browser-panels)
+   target_sources(
+     obs-studio
+     PRIVATE
+diff --git a/frontend/cmake/ui-oauth.cmake b/frontend/cmake/ui-oauth.cmake
+index b48f845..4bb8f67 100644
+--- a/frontend/cmake/ui-oauth.cmake
++++ b/frontend/cmake/ui-oauth.cmake
+@@ -1,4 +1,6 @@
+ target_sources(
+   obs-studio
+   PRIVATE oauth/Auth.cpp oauth/Auth.hpp oauth/AuthListener.cpp oauth/AuthListener.hpp oauth/OAuth.cpp oauth/OAuth.hpp
++    oauth/CherriesOAuth.cpp oauth/CherriesOAuth.hpp oauth/CherriesOAuthProtocol.hpp
++    oauth/CherriesMultistream.cpp oauth/CherriesMultistream.hpp oauth/CherriesSharedOutput.hpp
+ )
+diff --git a/frontend/oauth/AuthListener.cpp b/frontend/oauth/AuthListener.cpp
+index 1c955cc..d8d37ac 100644
+--- a/frontend/oauth/AuthListener.cpp
++++ b/frontend/oauth/AuthListener.cpp
+@@ -1,46 +1,23 @@
+ #include "AuthListener.hpp"
++#include "CherriesOAuthProtocol.hpp"
+ 
+ #include <OBSApp.hpp>
+-
+-#include <qt-wrappers.hpp>
+-
+-#include <QRegularExpression>
+ #include <QTcpServer>
+ #include <QTcpSocket>
++#include <QTimer>
+ 
+ #include "moc_AuthListener.cpp"
+ 
+-#define LOGO_URL "https://obsproject.com/assets/images/new_icon_small-r.png"
+-
+-static const QString serverResponseHeader = QStringLiteral("HTTP/1.0 200 OK\n"
+-							   "Connection: close\n"
+-							   "Content-Type: text/html; charset=UTF-8\n"
+-							   "Server: OBS Studio\n"
+-							   "\n"
+-							   "<html><head><title>OBS Studio"
+-							   "</title></head>");
+-
+-static const QString responseTemplate = "<center>"
+-					"<img src=\"" LOGO_URL
+-					"\" alt=\"OBS\" class=\"center\"  height=\"60\" width=\"60\">"
+-					"</center>"
+-					"<center><p style=\"font-family:verdana; font-size:13pt\">%1</p></center>";
+-
+ AuthListener::AuthListener(QObject *parent) : QObject(parent)
+ {
+ 	server = new QTcpServer(this);
+ 	connect(server, &QTcpServer::newConnection, this, &AuthListener::NewConnection);
+-	if (!server->listen(QHostAddress::LocalHost, 0)) {
+-		blog(LOG_DEBUG, "Server could not start");
+-		emit fail();
+-	} else {
+-		blog(LOG_DEBUG, "Server started at port %d", server->serverPort());
+-	}
++	server->listen(QHostAddress::LocalHost, 0);
+ }
+ 
+ quint16 AuthListener::GetPort()
+ {
+-	return server ? server->serverPort() : 0;
++	return server && server->isListening() ? server->serverPort() : 0;
+ }
+ 
+ void AuthListener::SetState(QString state)
+@@ -50,58 +27,42 @@ void AuthListener::SetState(QString state)
+ 
+ void AuthListener::NewConnection()
+ {
+-	QTcpSocket *socket = server->nextPendingConnection();
+-	if (socket) {
++	while (server->hasPendingConnections()) {
++		QTcpSocket *socket = server->nextPendingConnection();
+ 		connect(socket, &QTcpSocket::disconnected, socket, &QTcpSocket::deleteLater);
+-		connect(socket, &QTcpSocket::readyRead, socket, [&, socket]() {
+-			QByteArray buffer;
+-			while (socket->bytesAvailable() > 0) {
+-				buffer.append(socket->readAll());
++		QTimer::singleShot(10000, socket, [socket]() { socket->close(); });
++		connect(socket, &QTcpSocket::readyRead, this, [this, socket]() {
++			QByteArray request = socket->property("request").toByteArray();
++			request += socket->readAll();
++			if (request.size() > 8192) {
++				socket->close();
++				return;
++			}
++			if (!request.contains("\r\n\r\n")) {
++				socket->setProperty("request", request);
++				return;
+ 			}
+-			socket->write(QT_TO_UTF8(serverResponseHeader));
+-			QString redirect = QString::fromLatin1(buffer);
+-			blog(LOG_DEBUG, "redirect: %s", QT_TO_UTF8(redirect));
+-
+-			QRegularExpression re_state("(&|\\?)state=(?<state>[^&]+)");
+-			QRegularExpression re_code("(&|\\?)code=(?<code>[^&]+)");
+-
+-			QRegularExpressionMatch match = re_state.match(redirect);
+-
+ 			QString code;
+-
+-			if (match.hasMatch()) {
+-				if (state == match.captured("state")) {
+-					match = re_code.match(redirect);
+-					if (!match.hasMatch()) {
+-						blog(LOG_DEBUG, "no 'code' "
+-								"in server "
+-								"redirect");
+-					}
+-
+-					code = match.captured("code");
++			const auto result = CherriesOAuthProtocol::Callback(request, state, code);
++			using Result = CherriesOAuthProtocol::CallbackResult;
++			const bool valid = result != Result::Ignore;
++			const QByteArray body =
++				result == Result::Code
++					? "<html><body>Connected to OBS. You can close this tab.</body></html>"
++					: "<html><body>Authorization was not completed. Return to OBS.</body></html>";
++			socket->write(
++				QByteArray(valid ? "HTTP/1.1 200 OK\r\n" : "HTTP/1.1 400 Bad Request\r\n") +
++				"Content-Type: text/html; charset=UTF-8\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: " +
++				QByteArray::number(body.size()) + "\r\n\r\n" + body);
++			socket->disconnectFromHost();
++			if (valid) {
++				server->close();
++				if (result == Result::Code) {
++					emit ok(code);
+ 				} else {
+-					blog(LOG_WARNING, "state mismatch "
+-							  "while handling "
+-							  "redirect");
++					emit fail();
+ 				}
+-			} else {
+-				blog(LOG_DEBUG, "no 'state' in "
+-						"server redirect");
+-			}
+-
+-			if (code.isEmpty()) {
+-				auto data = responseTemplate.arg(QTStr("YouTube.Auth.NoCode"));
+-				socket->write(QT_TO_UTF8(data));
+-				emit fail();
+-			} else {
+-				auto data = responseTemplate.arg(QTStr("YouTube.Auth.Ok"));
+-				socket->write(QT_TO_UTF8(data));
+-				emit ok(code);
+ 			}
+-			socket->flush();
+-			socket->close();
+ 		});
+-	} else {
+-		emit fail();
+ 	}
+ }
+diff --git a/frontend/oauth/OAuth.cpp b/frontend/oauth/OAuth.cpp
+index aead7c0..eb46729 100644
+--- a/frontend/oauth/OAuth.cpp
++++ b/frontend/oauth/OAuth.cpp
+@@ -7,6 +7,7 @@
+ 
+ #include <QMessageBox>
+ #include <json11.hpp>
++#include <QUrl>
+ 
+ #include "moc_OAuth.cpp"
+ 
+@@ -83,9 +84,10 @@ bool OAuth::TokenExpired()
+ }
+ 
+ bool OAuth::GetToken(const char *url, const std::string &client_id, const std::string &secret,
+-		     const std::string &redirect_uri, int scope_ver, const std::string &auth_code, bool retry)
++		     const std::string &redirect_uri, int scope_ver, const std::string &auth_code, bool retry,
++		     const std::string &verifier)
+ {
+-	return GetTokenInternal(url, client_id, secret, redirect_uri, scope_ver, auth_code, retry);
++	return GetTokenInternal(url, client_id, secret, redirect_uri, scope_ver, auth_code, retry, verifier);
+ }
+ 
+ bool OAuth::GetToken(const char *url, const std::string &client_id, int scope_ver, const std::string &auth_code,
+@@ -95,7 +97,8 @@ bool OAuth::GetToken(const char *url, const std::string &client_id, int scope_ve
+ }
+ 
+ bool OAuth::GetTokenInternal(const char *url, const std::string &client_id, const std::string &secret,
+-			     const std::string &redirect_uri, int scope_ver, const std::string &auth_code, bool retry)
++			     const std::string &redirect_uri, int scope_ver, const std::string &auth_code, bool retry,
++			     const std::string &verifier)
+ try {
+ 	std::string output;
+ 	std::string error;
+@@ -118,24 +121,27 @@ try {
+ 
+ 	std::string post_data;
+ 	post_data += "action=redirect&client_id=";
+-	post_data += client_id;
++	post_data += QUrl::toPercentEncoding(client_id.c_str()).toStdString();
+ 	if (!secret.empty()) {
+ 		post_data += "&client_secret=";
+-		post_data += secret;
++		post_data += QUrl::toPercentEncoding(secret.c_str()).toStdString();
+ 	}
+ 	if (!redirect_uri.empty()) {
+ 		post_data += "&redirect_uri=";
+-		post_data += redirect_uri;
++		post_data += QUrl::toPercentEncoding(redirect_uri.c_str()).toStdString();
+ 	}
+ 
+ 	if (!auth_code.empty()) {
+ 		post_data += "&grant_type=authorization_code&code=";
+-		post_data += auth_code;
++		post_data += QUrl::toPercentEncoding(auth_code.c_str()).toStdString();
+ 	} else {
+ 		post_data += "&grant_type=refresh_token&refresh_token=";
+-		post_data += refresh_token;
++		post_data += QUrl::toPercentEncoding(refresh_token.c_str()).toStdString();
+ 	}
+ 
++	if (!verifier.empty()) {
++		post_data += "&code_verifier=" + QUrl::toPercentEncoding(verifier.c_str()).toStdString();
++	}
+ 	bool success = false;
+ 
+ 	auto func = [&]() {
+@@ -175,8 +181,10 @@ try {
+ 		throw ErrorInfo("Failed to get token from remote", error);
+ 	}
+ 
+-	if (!auth_code.empty()) {
++	if (!json["refresh_token"].string_value().empty()) {
+ 		refresh_token = json["refresh_token"].string_value();
++	}
++	if (!auth_code.empty()) {
+ 		if (refresh_token.empty()) {
+ 			throw ErrorInfo("Failed to get refresh token from "
+ 					"remote",
+diff --git a/frontend/oauth/OAuth.hpp b/frontend/oauth/OAuth.hpp
+index 46bd720..0dd9760 100644
+--- a/frontend/oauth/OAuth.hpp
++++ b/frontend/oauth/OAuth.hpp
+@@ -4,6 +4,7 @@
+ 
+ class OAuth : public Auth {
+ 	Q_OBJECT
++	friend class CherriesMultistream;
+ 
+ public:
+ 	inline OAuth(const Def &d) : Auth(d) {}
+@@ -31,15 +32,18 @@ protected:
+ 	bool GetToken(const char *url, const std::string &client_id, int scope_ver,
+ 		      const std::string &auth_code = std::string(), bool retry = false);
+ 	bool GetToken(const char *url, const std::string &client_id, const std::string &secret,
+-		      const std::string &redirect_uri, int scope_ver, const std::string &auth_code, bool retry);
++		      const std::string &redirect_uri, int scope_ver, const std::string &auth_code, bool retry,
++		      const std::string &verifier = {});
+ 
+ private:
+ 	bool GetTokenInternal(const char *url, const std::string &client_id, const std::string &secret,
+-			      const std::string &redirect_uri, int scope_ver, const std::string &auth_code, bool retry);
++			      const std::string &redirect_uri, int scope_ver, const std::string &auth_code, bool retry,
++			      const std::string &verifier = {});
+ };
+ 
+ class OAuthStreamKey : public OAuth {
+ 	Q_OBJECT
++	friend class CherriesMultistream;
+ 
+ protected:
+ 	std::string key_;
+diff --git a/frontend/oauth/TwitchAuth.cpp b/frontend/oauth/TwitchAuth.cpp
+index beee869..a0fb80c 100644
+--- a/frontend/oauth/TwitchAuth.cpp
++++ b/frontend/oauth/TwitchAuth.cpp
+@@ -1,4 +1,5 @@
+ #include "TwitchAuth.hpp"
++#include "CherriesOAuth.hpp"
+ 
+ #include <dialogs/OAuthLogin.hpp>
+ #include <docks/BrowserDock.hpp>
+@@ -32,7 +33,7 @@ static Auth::Def twitchDef = {"Twitch", Auth::Type::OAuth_StreamKey};
+ 
+ /* ------------------------------------------------------------------------- */
+ 
+-TwitchAuth::TwitchAuth(const Def &d) : OAuthStreamKey(d)
++TwitchAuth::TwitchAuth(const Def &d) : OAuthStreamKey(d), clientId(CherriesTwitchClient(nullptr, false))
+ {
+ 	if (!cef) {
+ 		return;
+@@ -43,6 +44,14 @@ TwitchAuth::TwitchAuth(const Def &d) : OAuthStreamKey(d)
+ 	/* enables javascript-based popups.  basically bttv popups */
+ 	cef->add_popup_whitelist_url("about:blank#blocked", this);
+ 
++	validationTimer.setInterval(60 * 60 * 1000);
++	connect(&validationTimer, &QTimer::timeout, this, [this]() {
++		if (uiLoaded && CherriesTwitchEnsureToken(clientId, token, refresh_token, expire_time)) {
++			SaveInternal();
++			config_save_safe(OBSBasic::Get()->Config(), "tmp", nullptr);
++		}
++	});
++	validationTimer.start();
+ 	uiLoadTimer.setSingleShot(true);
+ 	uiLoadTimer.setInterval(500);
+ 	connect(&uiLoadTimer, &QTimer::timeout, this, &TwitchAuth::TryLoadSecondaryUIPanes);
+@@ -64,8 +73,7 @@ TwitchAuth::~TwitchAuth()
+ 
+ bool TwitchAuth::MakeApiRequest(const char *path, Json &json_out)
+ {
+-	std::string client_id = TWITCH_CLIENTID;
+-	deobfuscate_str(&client_id[0], TWITCH_HASH);
++	const std::string &client_id = clientId;
+ 
+ 	std::string url = "https://api.twitch.tv/helix/";
+ 	url += std::string(path);
+@@ -117,12 +125,16 @@ bool TwitchAuth::MakeApiRequest(const char *path, Json &json_out)
+ 
+ bool TwitchAuth::GetChannelInfo()
+ try {
+-	std::string client_id = TWITCH_CLIENTID;
+-	deobfuscate_str(&client_id[0], TWITCH_HASH);
++	const std::string &client_id = clientId;
+ 
+-	if (!GetToken(TWITCH_TOKEN_URL, client_id, TWITCH_SCOPE_VERSION)) {
++	if (!CherriesTwitchEnsureToken(client_id, token, refresh_token, expire_time)) {
+ 		return false;
+ 	}
++	currentScopeVer = TWITCH_SCOPE_VERSION;
++	if (uiLoaded) {
++		SaveInternal();
++		config_save_safe(OBSBasic::Get()->Config(), "tmp", nullptr);
++	}
+ 	if (token.empty()) {
+ 		return false;
+ 	}
+@@ -161,6 +173,7 @@ try {
+ void TwitchAuth::SaveInternal()
+ {
+ 	OBSBasic *main = OBSBasic::Get();
++	config_set_string(main->Config(), "CherriesAccounts", "TwitchClientId", clientId.c_str());
+ 	config_set_string(main->Config(), service(), "Name", name.c_str());
+ 	config_set_string(main->Config(), service(), "UUID", uuid.c_str());
+ 
+@@ -452,39 +465,21 @@ void TwitchAuth::TryLoadSecondaryUIPanes()
+ 
+ bool TwitchAuth::RetryLogin()
+ {
+-	OAuthLogin login(OBSBasic::Get(), TWITCH_AUTH_URL, false);
+-	if (login.exec() == QDialog::Rejected) {
+-		return false;
++	if (clientId.empty()) {
++		clientId = CherriesTwitchClient(OBSBasic::Get(), true);
+ 	}
+-
+-	std::shared_ptr<TwitchAuth> auth = std::make_shared<TwitchAuth>(twitchDef);
+-	std::string client_id = TWITCH_CLIENTID;
+-	deobfuscate_str(&client_id[0], TWITCH_HASH);
+-
+-	return GetToken(TWITCH_TOKEN_URL, client_id, TWITCH_SCOPE_VERSION, QT_TO_UTF8(login.GetCode()), true);
++	return CherriesTwitchLogin(OBSBasic::Get(), clientId, token, refresh_token, expire_time);
+ }
+ 
+ std::shared_ptr<Auth> TwitchAuth::Login(QWidget *parent, const std::string &)
+ {
+-	OAuthLogin login(parent, TWITCH_AUTH_URL, false);
+-	if (login.exec() == QDialog::Rejected) {
++	auto auth = std::make_shared<TwitchAuth>(twitchDef);
++	auth->clientId = CherriesTwitchClient(parent, true);
++	if (!CherriesTwitchLogin(parent, auth->clientId, auth->token, auth->refresh_token, auth->expire_time)) {
+ 		return nullptr;
+ 	}
+-
+-	std::shared_ptr<TwitchAuth> auth = std::make_shared<TwitchAuth>(twitchDef);
+-
+-	std::string client_id = TWITCH_CLIENTID;
+-	deobfuscate_str(&client_id[0], TWITCH_HASH);
+-
+-	if (!auth->GetToken(TWITCH_TOKEN_URL, client_id, TWITCH_SCOPE_VERSION, QT_TO_UTF8(login.GetCode()))) {
+-		return nullptr;
+-	}
+-
+-	if (auth->GetChannelInfo()) {
+-		return auth;
+-	}
+-
+-	return nullptr;
++	auth->currentScopeVer = TWITCH_SCOPE_VERSION;
++	return auth->GetChannelInfo() ? auth : nullptr;
+ }
+ 
+ static std::shared_ptr<Auth> CreateTwitchAuth()
+@@ -501,11 +496,5 @@ static void DeleteCookies()
+ 
+ void RegisterTwitchAuth()
+ {
+-#if !defined(__APPLE__) && !defined(_WIN32)
+-	if (QApplication::platformName().contains("wayland")) {
+-		return;
+-	}
+-#endif
+-
+ 	OAuth::RegisterOAuth(twitchDef, CreateTwitchAuth, TwitchAuth::Login, DeleteCookies);
+ }
+diff --git a/frontend/oauth/TwitchAuth.hpp b/frontend/oauth/TwitchAuth.hpp
+index bbd8ca4..4298ebd 100644
+--- a/frontend/oauth/TwitchAuth.hpp
++++ b/frontend/oauth/TwitchAuth.hpp
+@@ -8,9 +8,12 @@
+ 
+ class TwitchAuth : public OAuthStreamKey {
+ 	Q_OBJECT
++	friend class CherriesMultistream;
+ 
+ 	bool uiLoaded = false;
+ 
++	std::string clientId;
++	QTimer validationTimer;
+ 	std::string name;
+ 	std::string uuid;
+ 
+diff --git a/frontend/oauth/YoutubeAuth.cpp b/frontend/oauth/YoutubeAuth.cpp
+index 415e5ad..539a27d 100644
+--- a/frontend/oauth/YoutubeAuth.cpp
++++ b/frontend/oauth/YoutubeAuth.cpp
+@@ -13,6 +13,8 @@
+ 
+ #include <QDesktopServices>
+ #include <QRandomGenerator>
++#include <QCryptographicHash>
++#include <QTimer>
+ 
+ #include "moc_YoutubeAuth.cpp"
+ 
+@@ -54,7 +56,12 @@ void RegisterYoutubeAuth()
+ 	}
+ }
+ 
+-YoutubeAuth::YoutubeAuth(const Def &d) : OAuthStreamKey(d), section(SECTION_NAME) {}
++YoutubeAuth::YoutubeAuth(const Def &d)
++	: OAuthStreamKey(d),
++	  section(SECTION_NAME),
++	  googleClient(CherriesYouTubeClient(nullptr, false))
++{
++}
+ 
+ YoutubeAuth::~YoutubeAuth()
+ {
+@@ -78,6 +85,8 @@ bool YoutubeAuth::RetryLogin()
+ void YoutubeAuth::SaveInternal()
+ {
+ 	OBSBasic *main = OBSBasic::Get();
++	config_set_string(main->Config(), "CherriesAccounts", "YouTubeClientId", googleClient.id.c_str());
++	config_set_string(main->Config(), "CherriesAccounts", "YouTubeClientSecret", googleClient.secret.c_str());
+ 	config_set_string(main->Config(), service(), "DockState", main->saveState().toBase64().constData());
+ 
+ 	const char *section_name = section.c_str();
+@@ -221,15 +230,20 @@ std::shared_ptr<Auth> YoutubeAuth::Login(QWidget *owner, const std::string &serv
+ 	dlg.setWindowFlags(dlg.windowFlags() & ~Qt::WindowCloseButtonHint);
+ 	dlg.setWindowTitle(QTStr("YouTube.Auth.WaitingAuth.Title"));
+ 
+-	std::string clientid = YOUTUBE_CLIENTID;
+-	std::string secret = YOUTUBE_SECRET;
+-	deobfuscate_str(&clientid[0], YOUTUBE_CLIENTID_HASH);
+-	deobfuscate_str(&secret[0], YOUTUBE_SECRET_HASH);
++	auth->googleClient = CherriesYouTubeClient(owner, true);
++	const auto &clientid = auth->googleClient.id;
++	const auto &secret = auth->googleClient.secret;
++	if (clientid.empty() || secret.empty() || server.GetPort() == 0) {
++		return nullptr;
++	}
+ 
+ 	QString state;
+ 	state = auth->GenerateState();
+ 	server.SetState(state);
+ 
++	const QString verifier = auth->GenerateState() + auth->GenerateState();
++	const QByteArray challenge = QCryptographicHash::hash(verifier.toUtf8(), QCryptographicHash::Sha256)
++					     .toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals);
+ 	QString url_template;
+ 	url_template += "%1";
+ 	url_template += "?response_type=code";
+@@ -238,6 +252,8 @@ std::shared_ptr<Auth> YoutubeAuth::Login(QWidget *owner, const std::string &serv
+ 	url_template += "&state=%4";
+ 	url_template += "&scope=https://www.googleapis.com/auth/youtube";
+ 	QString url = url_template.arg(YOUTUBE_AUTH_URL, clientid.c_str(), redirect_uri, state);
++	url += "&access_type=offline&prompt=consent%20select_account&code_challenge_method=S256&code_challenge=" +
++	       QString::fromLatin1(challenge);
+ 
+ 	QString text = QTStr("YouTube.Auth.WaitingAuth.Text");
+ 	text = text.arg(QString("<a href='%1'>Google OAuth Service</a>").arg(url));
+@@ -262,7 +278,7 @@ std::shared_ptr<Auth> YoutubeAuth::Login(QWidget *owner, const std::string &serv
+ 	// Async Login.
+ 	connect(&server, &AuthListener::ok, &dlg, [&dlg, &auth_code](QString code) {
+ #ifdef _DEBUG
+-		blog(LOG_DEBUG, "Got youtube redirected answer: %s", QT_TO_UTF8(code));
++		blog(LOG_DEBUG, "Received YouTube authorization callback");
+ #endif
+ 		auth_code = code;
+ 		dlg.accept();
+@@ -280,6 +296,7 @@ std::shared_ptr<Auth> YoutubeAuth::Login(QWidget *owner, const std::string &serv
+ 	QScopedPointer<QThread> thread(CreateQThread(open_external_browser));
+ 	thread->start();
+ 
++	QTimer::singleShot(5 * 60 * 1000, &dlg, &QDialog::reject);
+ 	dlg.exec();
+ 
+ 	if (dlg.result() == QMessageBox::Cancel || dlg.result() == QDialog::Rejected) {
+@@ -287,7 +304,7 @@ std::shared_ptr<Auth> YoutubeAuth::Login(QWidget *owner, const std::string &serv
+ 	}
+ 
+ 	if (!auth->GetToken(YOUTUBE_TOKEN_URL, clientid, secret, QT_TO_UTF8(redirect_uri), YOUTUBE_SCOPE_VERSION,
+-			    QT_TO_UTF8(auth_code), true)) {
++			    QT_TO_UTF8(auth_code), true, verifier.toStdString())) {
+ 		return nullptr;
+ 	}
+ 
+diff --git a/frontend/oauth/YoutubeAuth.hpp b/frontend/oauth/YoutubeAuth.hpp
+index cecc5f2..831101c 100644
+--- a/frontend/oauth/YoutubeAuth.hpp
++++ b/frontend/oauth/YoutubeAuth.hpp
+@@ -1,6 +1,7 @@
+ #pragma once
+ 
+ #include "OAuth.hpp"
++#include "CherriesOAuth.hpp"
+ 
+ inline const std::vector<Auth::Def> youtubeServices = {{"YouTube - RTMP", Auth::Type::OAuth_LinkedAccount, true, true},
+ 						       {"YouTube - RTMPS", Auth::Type::OAuth_LinkedAccount, true, true},
+@@ -12,10 +13,15 @@ class YoutubeChatDock;
+ 
+ class YoutubeAuth : public OAuthStreamKey {
+ 	Q_OBJECT
++	friend class CherriesMultistream;
+ 
+ 	bool uiLoaded = false;
+ 	std::string section;
+ 
++protected:
++	CherriesGoogleClient googleClient;
++
++private:
+ #ifdef BROWSER_AVAILABLE
+ 	YoutubeChatDock *chat = nullptr;
+ #endif
+diff --git a/frontend/utility/YoutubeApiWrappers.cpp b/frontend/utility/YoutubeApiWrappers.cpp
+index 731a88c..4ba3342 100644
+--- a/frontend/utility/YoutubeApiWrappers.cpp
++++ b/frontend/utility/YoutubeApiWrappers.cpp
+@@ -110,10 +110,8 @@ bool YoutubeApiWrappers::UpdateAccessToken()
+ 		return false;
+ 	}
+ 
+-	std::string clientid = YOUTUBE_CLIENTID;
+-	std::string secret = YOUTUBE_SECRET;
+-	deobfuscate_str(&clientid[0], YOUTUBE_CLIENTID_HASH);
+-	deobfuscate_str(&secret[0], YOUTUBE_SECRET_HASH);
++	const auto clientid = QUrl::toPercentEncoding(googleClient.id.c_str()).toStdString();
++	const auto secret = QUrl::toPercentEncoding(googleClient.secret.c_str()).toStdString();
+ 
+ 	std::string r_token = QUrl::toPercentEncoding(refresh_token.c_str()).toStdString();
+ 	const QString data_template = "client_id=%1"
+diff --git a/frontend/widgets/OBSBasic.cpp b/frontend/widgets/OBSBasic.cpp
+index 049a8b8..07356ae 100644
+--- a/frontend/widgets/OBSBasic.cpp
++++ b/frontend/widgets/OBSBasic.cpp
+@@ -18,6 +18,7 @@
+ ******************************************************************************/
+ 
+ #include "OBSBasic.hpp"
++#include <oauth/CherriesMultistream.hpp>
+ #include "ui-config.h"
+ 
+ #include "ColorSelect.hpp"
+@@ -1249,6 +1250,7 @@ void OBSBasic::OBSInit()
+ 
+ void OBSBasic::OnFirstLoad()
+ {
++	CherriesInstallMultistream(this);
+ 	OnEvent(OBS_FRONTEND_EVENT_FINISHED_LOADING);
+ 
+ #ifdef WHATSNEW_ENABLED
+diff --git a/frontend/widgets/OBSBasic.hpp b/frontend/widgets/OBSBasic.hpp
+index 571de9f..2b78886 100644
+--- a/frontend/widgets/OBSBasic.hpp
++++ b/frontend/widgets/OBSBasic.hpp
+@@ -187,6 +187,7 @@ static inline void ClearProcessPriority()
+ 
+ class OBSBasic : public OBSMainWindow {
+ 	Q_OBJECT
++	friend class CherriesMultistream;
+ 	Q_PROPERTY(QIcon imageIcon READ GetImageIcon WRITE SetImageIcon DESIGNABLE true)
+ 	Q_PROPERTY(QIcon colorIcon READ GetColorIcon WRITE SetColorIcon DESIGNABLE true)
+ 	Q_PROPERTY(QIcon slideshowIcon READ GetSlideshowIcon WRITE SetSlideshowIcon DESIGNABLE true)
+diff --git a/frontend/widgets/OBSBasic_Streaming.cpp b/frontend/widgets/OBSBasic_Streaming.cpp
+index bd6deb5..b65bef2 100644
+--- a/frontend/widgets/OBSBasic_Streaming.cpp
++++ b/frontend/widgets/OBSBasic_Streaming.cpp
+@@ -80,7 +80,10 @@ void OBSBasic::StartStreaming()
+ 		sysTrayStream->setText("Basic.Main.PreparingStream");
+ 	}
+ 
+-	auto finish_stream_setup = [&](bool setupStreamingResult) {
++	auto finish_stream_setup = [&, streamService = OBSService{service}](bool setupStreamingResult) {
++		if (service != streamService.Get()) {
++			return;
++		}
+ 		if (!setupStreamingResult) {
+ 			DisplayStreamStartError();
+ 			return;

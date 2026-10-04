@@ -4,7 +4,7 @@
 
 Name: cherries-obs-wayland
 Version: 0.1
-Release: 4.experimental%{?dist}
+Release: 5.experimental%{?dist}
 Summary: Experimental OBS build with Wayland browser docks
 License: GPL-2.0-or-later AND BSD-3-Clause
 URL: https://github.com/iBustcherries/Cherries-OBS-browser
@@ -15,7 +15,10 @@ Requires: mesa-libEGL
 %description
 Experimental OBS Studio and CEF build using off-screen browser docks on
 Wayland. Installed under /opt/cherries-obs with a separate launcher.
-Embedded OAuth popups, DevTools, and full IME support are incomplete.
+Includes native Twitch/YouTube account connections and a multistream dock
+that shares the primary OBS encoders across destinations. Application
+credentials are configured through the UI. DevTools and full IME support
+are incomplete.
 
 %prep
 
@@ -26,6 +29,7 @@ mkdir -p %{buildroot}/opt %{buildroot}/usr/bin %{buildroot}/usr/share/applicatio
 cp -a %{stage_dir}/opt/cherries-obs %{buildroot}/opt/
 cat > %{buildroot}/usr/bin/cherries-obs-wayland <<'EOF'
 #!/bin/sh
+umask 077
 export QT_QPA_PLATFORM=wayland
 export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}/cherries-obs-experimental"
 exec /opt/cherries-obs/bin/obs "$@"
