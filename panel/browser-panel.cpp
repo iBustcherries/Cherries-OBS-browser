@@ -177,7 +177,7 @@ QCefWidgetInternal::QCefWidgetInternal(QWidget *parent, const std::string &url_,
 		setAttribute(Qt::WA_InputMethodEnabled);
 		updateOSRGeometry();
 		connect(&paintTimer, &QTimer::timeout, this, [this]() {
-			Qt::CursorShape shape = Qt::ArrowCursor;
+			auto shape = Qt::ArrowCursor;
 			switch (osrState->cursor.load()) {
 			case CT_HAND:
 				shape = Qt::PointingHandCursor;

@@ -26,6 +26,7 @@ jobs:
           repository: obsproject/obs-studio
           ref: cffa83ba552f1ef6a0a05851c3aa07b3811d7e58
           path: obs
+          fetch-depth: 0
           submodules: recursive
           persist-credentials: false
       - name: Integrate fork into OBS

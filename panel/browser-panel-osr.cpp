@@ -362,6 +362,10 @@ QVariant QCefWidgetInternal::inputMethodQuery(Qt::InputMethodQuery query) const
 
 bool QCefWidgetInternal::event(QEvent *event)
 {
+	if (windowless && event->type() == QEvent::ShortcutOverride) {
+		event->accept();
+		return true;
+	}
 	// QWidget normally consumes Tab for focus traversal before keyPressEvent.
 	if (windowless && (event->type() == QEvent::KeyPress || event->type() == QEvent::KeyRelease)) {
 		auto key = static_cast<QKeyEvent *>(event);

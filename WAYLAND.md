@@ -1,6 +1,8 @@
 # Experimental Wayland browser docks
 
-Status: initial implementation, awaiting compilation and real compositor testing.
+Status: initial implementation. Local syntax checks pass against CEF 7871,
+Qt 6.4.2 and OBS 30 development headers, with and without ENABLE_WAYLAND.
+Full pinned-OBS compilation and real compositor testing are pending.
 This branch is not a validated Fedora RPM release.
 
 ## Integration
