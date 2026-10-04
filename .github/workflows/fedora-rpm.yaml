@@ -68,6 +68,7 @@ jobs:
           cmake -S obs -B obs/build-fedora -G Ninja \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_INSTALL_PREFIX=/opt/cherries-obs \
             -DCMAKE_INSTALL_LIBDIR=lib64 -DENABLE_RELOCATABLE=ON \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
             -DENABLE_BROWSER=ON -DENABLE_BROWSER_PANELS=ON -DENABLE_WAYLAND=ON \
             -DCEF_ROOT_DIR="$GITHUB_WORKSPACE/obs/.deps/cef" \
             -DENABLE_AJA=OFF -DENABLE_VLC=OFF -DENABLE_WEBRTC=OFF \
