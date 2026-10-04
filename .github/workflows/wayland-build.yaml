@@ -3,8 +3,10 @@ name: Experimental Wayland OBS build
 on:
   push:
     branches: [wayland-osr-docks]
+    paths: ['panel/**', 'cmake/**', '.github/workflows/wayland-build.yaml']
   pull_request:
     branches: [master]
+    paths: ['panel/**', 'cmake/**', '.github/workflows/wayland-build.yaml']
   workflow_dispatch:
 
 permissions:

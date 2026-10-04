@@ -82,6 +82,11 @@ jobs:
             --define "stage_dir $GITHUB_WORKSPACE/stage"
           rpm -qpl rpmbuild/RPMS/x86_64/*.rpm
           rpm -qpR rpmbuild/RPMS/x86_64/*.rpm
+      - name: Verify RPM installation and executable loading
+        shell: bash
+        run: |
+          dnf install -y rpmbuild/RPMS/x86_64/*.rpm
+          cherries-obs-wayland --version
       - name: Upload experimental Fedora RPM
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:

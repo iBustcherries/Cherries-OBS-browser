@@ -9,6 +9,8 @@ Summary: Experimental OBS build with Wayland browser docks
 License: GPL-2.0-or-later AND BSD-3-Clause
 URL: https://github.com/iBustcherries/Cherries-OBS-browser
 Requires: fontconfig
+Requires: qt6-qtwayland
+Requires: mesa-libEGL
 
 %description
 Experimental OBS Studio and CEF build using off-screen browser docks on
