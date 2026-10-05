@@ -4,7 +4,7 @@
 
 Name: cherries-obs-wayland
 Version: 0.1
-Release: 7.experimental%{?dist}
+Release: 8.experimental%{?dist}
 Summary: Experimental OBS build with Wayland browser docks
 License: GPL-2.0-or-later AND BSD-3-Clause
 URL: https://github.com/iBustcherries/Cherries-OBS-browser
@@ -15,8 +15,8 @@ Requires: mesa-libEGL
 %description
 Experimental OBS Studio and CEF build using off-screen browser docks on
 Wayland. Installed under /opt/cherries-obs with a separate launcher.
-Includes native Twitch/YouTube account connections and a multistream dock
-that shares the primary OBS encoders across destinations. Application
+Includes native Twitch/YouTube account connections and shared-video multistream
+with per-account audio track selection and native broadcast management. Application
 credentials are configured through the UI. DevTools and full IME support
 are incomplete.
 

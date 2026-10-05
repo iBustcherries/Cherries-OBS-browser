@@ -25,15 +25,16 @@ index be87b50..3c92b93 100644
      obs-studio
      PRIVATE
 diff --git a/frontend/cmake/ui-oauth.cmake b/frontend/cmake/ui-oauth.cmake
-index b48f845..4bb8f67 100644
+index b48f845..4e5672d 100644
 --- a/frontend/cmake/ui-oauth.cmake
 +++ b/frontend/cmake/ui-oauth.cmake
-@@ -1,4 +1,6 @@
+@@ -1,4 +1,7 @@
  target_sources(
    obs-studio
    PRIVATE oauth/Auth.cpp oauth/Auth.hpp oauth/AuthListener.cpp oauth/AuthListener.hpp oauth/OAuth.cpp oauth/OAuth.hpp
 +    oauth/CherriesOAuth.cpp oauth/CherriesOAuth.hpp oauth/CherriesOAuthProtocol.hpp
 +    oauth/CherriesMultistream.cpp oauth/CherriesMultistream.hpp oauth/CherriesSharedOutput.hpp
++    oauth/CherriesTwitchBroadcast.cpp oauth/CherriesTwitchBroadcast.hpp
  )
 diff --git a/frontend/dialogs/OBSYoutubeActions.cpp b/frontend/dialogs/OBSYoutubeActions.cpp
 index 0b4006f..9199843 100644
@@ -1012,10 +1013,18 @@ index 571de9f..2b78886 100644
  	Q_PROPERTY(QIcon colorIcon READ GetColorIcon WRITE SetColorIcon DESIGNABLE true)
  	Q_PROPERTY(QIcon slideshowIcon READ GetSlideshowIcon WRITE SetSlideshowIcon DESIGNABLE true)
 diff --git a/frontend/widgets/OBSBasicControls.cpp b/frontend/widgets/OBSBasicControls.cpp
-index 81d8ad8..94a8523 100644
+index 81d8ad8..327be4b 100644
 --- a/frontend/widgets/OBSBasicControls.cpp
 +++ b/frontend/widgets/OBSBasicControls.cpp
-@@ -8,6 +8,12 @@ OBSBasicControls::OBSBasicControls(OBSBasic *main) : QFrame(nullptr), ui(new Ui:
+@@ -1,6 +1,7 @@
+ #include "OBSBasicControls.hpp"
+ #include "OBSBasic.hpp"
+ #include "qt-wrappers.hpp"
++#include <oauth/CherriesMultistream.hpp>
+ 
+ #include "moc_OBSBasicControls.cpp"
+ 
+@@ -8,6 +9,21 @@ OBSBasicControls::OBSBasicControls(OBSBasic *main) : QFrame(nullptr), ui(new Ui:
  {
  	/* Create UI elements */
  	ui->setupUi(this);
@@ -1025,10 +1034,19 @@ index 81d8ad8..94a8523 100644
 +	ui->buttonsVLayout->insertWidget(0, ui->broadcastButton);
 +	ui->buttonsVLayout->insertWidget(1, ui->streamButton);
 +	ui->broadcastButton->setText("Manage Broadcast");
++	twitchBroadcastButton = new QPushButton("Twitch Stream Info · Connected", this);
++	youtubeBroadcastButton = new QPushButton("YouTube Broadcasts · Connected", this);
++	twitchBroadcastButton->setStyleSheet("QPushButton { border-left: 4px solid #9146ff; }");
++	youtubeBroadcastButton->setStyleSheet("QPushButton { border-left: 4px solid #ff3333; }");
++	ui->buttonsVLayout->insertWidget(1, twitchBroadcastButton);
++	ui->buttonsVLayout->insertWidget(2, youtubeBroadcastButton);
++	SetPlatformConnections(false, false);
++	connect(twitchBroadcastButton, &QPushButton::clicked, this, []() { CherriesManageBroadcast(0); });
++	connect(youtubeBroadcastButton, &QPushButton::clicked, this, []() { CherriesManageBroadcast(1); });
  
  	streamButtonMenu.reset(new QMenu());
  	startStreamAction = streamButtonMenu->addAction(QTStr("Basic.Main.StartStreaming"));
-@@ -58,7 +64,7 @@ OBSBasicControls::OBSBasicControls(OBSBasic *main) : QFrame(nullptr), ui(new Ui:
+@@ -58,7 +74,7 @@ OBSBasicControls::OBSBasicControls(OBSBasic *main) : QFrame(nullptr), ui(new Ui:
  		[this]() { emit this->ForceStopStreamMenuActionClicked(); }, Qt::DirectConnection);
  
  	/* Set up default visibility */
@@ -1037,7 +1055,19 @@ index 81d8ad8..94a8523 100644
  	ui->pauseRecordButton->setVisible(false);
  	ui->replayBufferButton->setVisible(false);
  	ui->saveReplayButton->setVisible(false);
-@@ -103,20 +109,9 @@ void OBSBasicControls::StreamingPreparing()
+@@ -97,26 +113,21 @@ OBSBasicControls::OBSBasicControls(OBSBasic *main) : QFrame(nullptr), ui(new Ui:
+ 	connect(main, &OBSBasic::VirtualCamEnabled, this, &OBSBasicControls::EnableVirtualCamButtons);
+ }
+ 
++void OBSBasicControls::SetPlatformConnections(bool twitch, bool youtube)
++{
++	twitchBroadcastButton->setVisible(twitch);
++	youtubeBroadcastButton->setVisible(youtube);
++}
++
+ void OBSBasicControls::StreamingPreparing()
+ {
+ 	ui->streamButton->setEnabled(false);
  	ui->streamButton->setText(QTStr("Basic.Main.PreparingStream"));
  }
  
@@ -1059,7 +1089,7 @@ index 81d8ad8..94a8523 100644
  }
  
  void OBSBasicControls::StreamingStarted(bool withDelay)
-@@ -155,26 +150,25 @@ void OBSBasicControls::StreamingStopped(bool withDelay)
+@@ -155,26 +166,25 @@ void OBSBasicControls::StreamingStopped(bool withDelay)
  	}
  }
  
@@ -1096,7 +1126,7 @@ index 81d8ad8..94a8523 100644
  }
  
  void OBSBasicControls::RecordingStarted(bool pausable)
-@@ -261,16 +255,11 @@ void OBSBasicControls::UpdateStudioModeState(bool enabled)
+@@ -261,16 +271,11 @@ void OBSBasicControls::UpdateStudioModeState(bool enabled)
  	setClasses(ui->modeSwitch, enabled ? "state-active" : "");
  }
  
@@ -1117,8 +1147,29 @@ index 81d8ad8..94a8523 100644
  }
  
  void OBSBasicControls::EnableReplayBufferButtons(bool enabled)
+diff --git a/frontend/widgets/OBSBasicControls.hpp b/frontend/widgets/OBSBasicControls.hpp
+index 4dae83b..aa2a00c 100644
+--- a/frontend/widgets/OBSBasicControls.hpp
++++ b/frontend/widgets/OBSBasicControls.hpp
+@@ -18,6 +18,8 @@ class OBSBasicControls : public QFrame {
+ 	QScopedPointer<QMenu> streamButtonMenu;
+ 	QPointer<QAction> startStreamAction;
+ 	QPointer<QAction> stopStreamAction;
++	QPushButton *twitchBroadcastButton;
++	QPushButton *youtubeBroadcastButton;
+ 
+ private slots:
+ 	void StreamingPreparing();
+@@ -50,6 +52,7 @@ private slots:
+ 	void EnableVirtualCamButtons();
+ 
+ public:
++	void SetPlatformConnections(bool twitch, bool youtube);
+ 	OBSBasicControls(OBSBasic *main);
+ 	inline ~OBSBasicControls() {}
+ 
 diff --git a/frontend/widgets/OBSBasic_Streaming.cpp b/frontend/widgets/OBSBasic_Streaming.cpp
-index bd6deb5..e929bec 100644
+index bd6deb5..1daf74f 100644
 --- a/frontend/widgets/OBSBasic_Streaming.cpp
 +++ b/frontend/widgets/OBSBasic_Streaming.cpp
 @@ -18,6 +18,8 @@
@@ -1140,7 +1191,7 @@ index bd6deb5..e929bec 100644
  	if (outputHandler->StreamingActive()) {
  		return;
  	}
-@@ -80,12 +85,23 @@ void OBSBasic::StartStreaming()
+@@ -80,12 +85,30 @@ void OBSBasic::StartStreaming()
  		sysTrayStream->setText("Basic.Main.PreparingStream");
  	}
  
@@ -1162,10 +1213,17 @@ index bd6deb5..e929bec 100644
 +			return;
 +		}
 +
++		if (obs_data_get_bool(serviceSettings, "cherries_multistream") &&
++		    !CherriesConfigureAudio(outputHandler->StreamingOutput())) {
++			outputHandler->lastError = "Could not configure the selected audio tracks.";
++			DisplayStreamStartError();
++			return;
++		}
++
  		OnEvent(OBS_FRONTEND_EVENT_STREAMING_STARTING);
  
  		SaveProject();
-@@ -422,6 +438,11 @@ void OBSBasic::StreamActionTriggered()
+@@ -422,6 +445,11 @@ void OBSBasic::StreamActionTriggered()
  			return;
  		}
  

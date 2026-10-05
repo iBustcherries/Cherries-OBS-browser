@@ -1,22 +1,22 @@
 #include "CherriesMultistream.hpp"
 #include "CherriesOAuth.hpp"
 #include "CherriesSharedOutput.hpp"
+#include "CherriesTwitchBroadcast.hpp"
 #include "TwitchAuth.hpp"
 #include "YoutubeAuth.hpp"
 #include <dialogs/OBSYoutubeActions.hpp>
 #include <utility/YoutubeApiWrappers.hpp>
 #include <widgets/OBSBasic.hpp>
+#include <widgets/OBSBasicControls.hpp>
 #include <settings/OBSBasicSettings.hpp>
 #include <qt-wrappers.hpp>
 #include <obs-frontend-api.h>
-#include <browser-panel.hpp>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QTabWidget>
 #include <QInputDialog>
 #include <QPointer>
 #include <QFormLayout>
-#include <QCryptographicHash>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QSignalBlocker>
@@ -37,20 +37,18 @@
 #include <QTimer>
 #include <QVBoxLayout>
 
-extern QCef *cef;
-
 class CherriesMultistream : public QWidget {
 	struct Account {
 		QString id;
 		QString label;
 		std::shared_ptr<OAuth> auth;
 		bool selected = true;
+		int audioTrack = 0; // 0 retains the normal OBS streaming track.
 		QString server;
 		QString key;
 		QString status = "Offline";
 		bool connected = true;
 		QString broadcast;
-		std::unique_ptr<QCefCookieManager> cookies;
 		OBSOutputAutoRelease output;
 		OBSServiceAutoRelease service;
 	};
@@ -72,6 +70,8 @@ class CherriesMultistream : public QWidget {
 	bool running = false;
 	bool preparing = false;
 	Account *primary = nullptr;
+	CherriesAudioEncoders audioEncoders;
+	OBSEncoderAutoRelease audioTemplate;
 	OBSServiceAutoRelease previousService;
 	std::shared_ptr<Auth> previousAuth;
 	bool previousAutoStart = false;
@@ -94,6 +94,7 @@ class CherriesMultistream : public QWidget {
 					   {"label", account->label},
 					   {"service", auth->service()},
 					   {"selected", account->selected},
+					   {"audio_track", account->audioTrack},
 					   {"token", QString::fromStdString(auth->token)},
 					   {"refresh", QString::fromStdString(auth->refresh_token)},
 					   {"expiry", QString::number(auth->expire_time)},
@@ -150,12 +151,15 @@ class CherriesMultistream : public QWidget {
 			account->label = record.value("label").toString();
 			account->auth = auth;
 			account->selected = record.value("selected").toBool();
+			const int track = record.value("audio_track").toInt();
+			account->audioTrack = track >= 0 && track <= MAX_AUDIO_MIXES ? track : 0;
 			accounts.push_back(std::move(account));
 		}
 	}
 
 	void Update()
 	{
+		const bool busy = running || preparing || obs_frontend_streaming_active();
 		table->setRowCount(int(accounts.size()));
 		for (int i = 0; i < int(accounts.size()); ++i) {
 			auto &account = *accounts[i];
@@ -168,11 +172,26 @@ class CherriesMultistream : public QWidget {
 					Save();
 				});
 			}
-			table->cellWidget(i, 0)->setEnabled(!running && !preparing);
+			table->cellWidget(i, 0)->setEnabled(!busy);
 			table->setItem(i, 1, new QTableWidgetItem(account.label));
 			table->setItem(i, 2, new QTableWidgetItem(account.status));
+			if (!table->cellWidget(i, 3)) {
+				auto tracks = new QComboBox(table);
+				tracks->addItem("OBS default", 0);
+				for (int track = 1; track <= MAX_AUDIO_MIXES; ++track)
+					tracks->addItem(QString("Track %1").arg(track), track);
+				tracks->setCurrentIndex(account.audioTrack);
+				tracks->setToolTip(
+					"Choose the OBS audio track sent to this account. Assign sources to tracks in Advanced Audio Properties.");
+				table->setCellWidget(i, 3, tracks);
+				connect(tracks, qOverload<int>(&QComboBox::currentIndexChanged), this,
+					[this, ptr = &account](int track) {
+						ptr->audioTrack = track;
+						Save();
+					});
+			}
+			table->cellWidget(i, 3)->setEnabled(!busy);
 		}
-		const bool busy = running || preparing || obs_frontend_streaming_active();
 		QStringList states;
 		bool twitchConnected = false, youtubeConnected = false;
 		for (const auto &a : accounts) {
@@ -189,6 +208,8 @@ class CherriesMultistream : public QWidget {
 			states << "YouTube: <span style='color:#63d471'>Connected</span>";
 		connections->setText(states.join("<br>"));
 		connections->setVisible(!states.isEmpty());
+		if (auto controls = main->findChild<OBSBasicControls *>())
+			controls->SetPlatformConnections(twitchConnected, youtubeConnected);
 		addons->setVisible(twitchConnected);
 		addons->setEnabled(!busy);
 		addTwitch->setEnabled(!busy);
@@ -261,6 +282,8 @@ class CherriesMultistream : public QWidget {
 			}
 		}
 		primary = nullptr;
+		audioEncoders.Clear();
+		audioTemplate = nullptr;
 		running = false;
 		preparing = false;
 		Save();
@@ -404,8 +427,9 @@ class CherriesMultistream : public QWidget {
 				account->status = "Could not create output";
 				continue;
 			}
-			// These are the exact encoders used by OBS's primary output. No new encoders or render paths.
-			if (!CherriesShareEncoders(account->output, source)) {
+			// Video always shares the primary encoder. Audio is shared per selected OBS track.
+			auto trackEncoder = audioEncoders.Get(audioTemplate, account->audioTrack);
+			if (!trackEncoder || !CherriesShareEncoders(account->output, source, trackEncoder)) {
 				account->status = "Incompatible shared encoder";
 				continue;
 			}
@@ -414,7 +438,7 @@ class CherriesMultistream : public QWidget {
 			account->status = obs_output_start(account->output) ? "Connecting" : "Connection failed";
 		}
 		message->setText(
-			"All destinations share OBS's video and audio encoders. Sending does not confirm platform live status.");
+			"All destinations share OBS's video encoder; audio encoders are shared by track. Sending does not confirm platform live status.");
 		Update();
 	}
 
@@ -441,6 +465,25 @@ class CherriesMultistream : public QWidget {
 	}
 
 public:
+	bool ConfigureAudio(obs_output_t *output)
+	{
+		if (!preparing || !primary)
+			return true;
+		audioEncoders.Clear();
+		audioTemplate = obs_encoder_get_ref(obs_output_get_audio_encoder(output, 0));
+		for (const auto &account : accounts) {
+			if (account->selected && !audioEncoders.Get(audioTemplate, account->audioTrack)) {
+				message->setText(
+					"Could not create the selected AAC audio track. Check Settings → Output.");
+				return false;
+			}
+		}
+		auto encoder = audioEncoders.Get(audioTemplate, primary->audioTrack);
+		if (!encoder)
+			return false;
+		obs_output_set_audio_encoder(output, encoder, 0);
+		return true;
+	}
 	bool HasAccounts() const { return !accounts.empty(); }
 	bool HasSelected() const
 	{
@@ -523,7 +566,7 @@ public:
 		Save();
 		Update();
 	}
-	void Manage();
+	void Manage(int tab = -1);
 	explicit CherriesMultistream(OBSBasic *obsMain) : QWidget(obsMain), main(obsMain)
 	{
 		auto layout = new QVBoxLayout(this);
@@ -535,9 +578,10 @@ public:
 			this);
 		message->setWordWrap(true);
 		layout->addWidget(message);
-		table = new QTableWidget(0, 3, this);
-		table->setHorizontalHeaderLabels({"Use", "Account", "Connection"});
+		table = new QTableWidget(0, 4, this);
+		table->setHorizontalHeaderLabels({"Use", "Account", "Connection", "Audio track"});
 		table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+		table->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
 		table->setEditTriggers(QAbstractItemView::NoEditTriggers);
 		table->setSelectionBehavior(QAbstractItemView::SelectRows);
 		table->setMaximumHeight(150);
@@ -694,13 +738,17 @@ bool CherriesHasSelectedStreams()
 {
 	return manager && manager->HasAccounts();
 }
-void CherriesManageBroadcast()
+void CherriesManageBroadcast(int tab)
 {
 	if (manager)
-		manager->Manage();
+		manager->Manage(tab);
+}
+bool CherriesConfigureAudio(obs_output_t *output)
+{
+	return !manager || manager->ConfigureAudio(output);
 }
 
-void CherriesMultistream::Manage()
+void CherriesMultistream::Manage(int tab)
 {
 	if (preparing)
 		return;
@@ -719,6 +767,8 @@ void CherriesMultistream::Manage()
 			return nullptr;
 		if (matches.size() == 1)
 			return matches[0];
+		if (tab >= 0 && wantTwitch != (tab == 0))
+			return matches[0];
 		bool ok = false;
 		QString choice = QInputDialog::getItem(main, "Manage Broadcast",
 						       wantTwitch ? "Twitch account" : "YouTube account", names, 0,
@@ -731,34 +781,28 @@ void CherriesMultistream::Manage()
 	window.setWindowTitle("Manage Broadcast");
 	window.resize(950, 800);
 	auto layout = new QVBoxLayout(&window);
-	auto twitchPage = new QWidget;
-	auto twitchLayout = new QVBoxLayout(twitchPage);
-	QCefWidget *browser = nullptr;
-	if (twitch && cef) {
-		const QString hash = QString::fromLatin1(
-			QCryptographicHash::hash(twitch->id.toUtf8(), QCryptographicHash::Sha256).toHex());
-		if (!twitch->cookies)
-			twitch->cookies.reset(
-				cef->create_cookie_manager("cherries-twitch-" + hash.toStdString(), true));
-		auto accountLabel = new QLabel("Twitch account: " + twitch->label +
-					      " — sign in to this account in the embedded page if prompted.",
-					      twitchPage);
-		accountLabel->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
-		twitchLayout->addWidget(accountLabel);
-		browser = cef->create_widget(twitchPage,
-					     "https://dashboard.twitch.tv/popout/u/" +
-						     dynamic_cast<TwitchAuth *>(twitch->auth.get())->name +
-						     "/stream-manager/edit-stream-info",
-					     twitch->cookies.get());
-		if (browser)
-			twitchLayout->addWidget(browser, 1);
-	} else
-		twitchLayout->addWidget(new QLabel(
-			"Connect a Twitch account in Settings → Stream to edit its stream info.", twitchPage));
+	QWidget *twitchPage;
+	if (twitch) {
+		auto auth = std::dynamic_pointer_cast<TwitchAuth>(twitch->auth);
+		twitchPage = CherriesCreateTwitchBroadcast(
+			&window, twitch->label, auth->clientId, [this, auth]() -> std::string {
+				if (!CherriesTwitchEnsureToken(auth->clientId, auth->token, auth->refresh_token,
+							       auth->expire_time))
+					return {};
+				Save();
+				return auth->token;
+			});
+	} else {
+		twitchPage = new QWidget(&window);
+		auto body = new QVBoxLayout(twitchPage);
+		body->addWidget(new QLabel("Connect a Twitch account in Settings → Stream to edit its stream info.",
+					   twitchPage));
+	}
 	if (youtube) {
 		OBSYoutubeActions editor(&window, youtube->auth.get(), false);
 		editor.setWindowFlags(Qt::Widget);
 		editor.SetCombinedPage(twitchPage);
+		editor.findChild<QTabWidget *>("tabWidget")->setCurrentIndex(tab > 0 ? tab : 0);
 		layout->addWidget(&editor, 1);
 		connect(&editor, &OBSYoutubeActions::rejected, &window, &QDialog::reject);
 		connect(&editor, &OBSYoutubeActions::ok, &window,
@@ -779,10 +823,6 @@ void CherriesMultistream::Manage()
 				Update();
 			});
 		window.exec();
-		if (browser)
-			browser->closeBrowser();
-		if (twitch && twitch->cookies)
-			twitch->cookies->FlushStore();
 	} else {
 		auto tabs = new QTabWidget(&window);
 		tabs->addTab(twitchPage, "Twitch Stream Info");
@@ -794,15 +834,12 @@ void CherriesMultistream::Manage()
 				"Connect a YouTube account in Settings → Stream to manage broadcasts.", page));
 			tabs->addTab(page, name);
 		}
+		tabs->setCurrentIndex(tab > 0 ? tab : 0);
 		layout->addWidget(tabs);
 		auto buttons = new QDialogButtonBox(QDialogButtonBox::Close, &window);
 		connect(buttons, &QDialogButtonBox::rejected, &window, &QDialog::reject);
 		layout->addWidget(buttons);
 		window.exec();
-		if (browser)
-			browser->closeBrowser();
-		if (twitch && twitch->cookies)
-			twitch->cookies->FlushStore();
 	}
 	Save();
 }
