@@ -42,7 +42,7 @@ jobs:
             pciutils-devel uthash-devel simde-devel nlohmann-json-devel \
             websocketpp-devel asio-devel libqrcodegencpp-devel mbedtls-devel \
             libuuid-devel zlib-devel python3-devel speexdsp-devel x264-devel libvpl-devel fontconfig-devel freetype-devel nv-codec-headers vulkan-loader-devel vulkan-headers zenity pipewire pipewire-utils wireplumber dbus-daemon
-          dnf install -y glibc-devel.i686 libgcc.i686 vulkan-loader-devel.i686 mesa-libGL-devel.i686
+          dnf install -y glibc-devel.i686 libgcc.i686 libatomic.i686 vulkan-loader-devel.i686 mesa-libGL-devel.i686
       - name: Check out browser changes
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
