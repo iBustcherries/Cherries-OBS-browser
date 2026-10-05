@@ -38,11 +38,19 @@ static void SaveSetting(const char *key, const std::string &value)
 {
 	config_set_string(OBSBasic::Get()->Config(), "Twitch", key, value.c_str());
 	config_save_safe(OBSBasic::Get()->Config(), "tmp", nullptr);
+	if (std::string(key) == "ClientId") {
+		config_set_string(App()->GetUserConfig(), "CherriesTwitch", "ClientId", value.c_str());
+		config_save_safe(App()->GetUserConfig(), "tmp", nullptr);
+	}
 }
 
 std::string CherriesTwitchClient(QWidget *parent, bool setup, bool forceSetup)
 {
 	auto client = Setting("ClientId");
+	if (client.empty()) {
+		const char *saved = config_get_string(App()->GetUserConfig(), "CherriesTwitch", "ClientId");
+		client = saved ? saved : "";
+	}
 	if (client.empty())
 		client = CherriesBundledTwitchId;
 	if ((!client.empty() || !setup) && !forceSetup)
