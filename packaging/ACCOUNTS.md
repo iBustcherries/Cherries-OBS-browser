@@ -128,9 +128,10 @@ creation and control use the saved OAuth account.
 
 ### Release 9 validation status
 
-The account/UI changes and routing tests are checked locally. Full Fedora
-compilation, RPM packaging, installation and live account tests remain pending.
-The final RPM build is intentionally held for the user's review.
+The account/UI changes and routing tests are checked locally. The release 9
+Fedora build is approved and queued for compilation, RPM packaging and
+installation checks. Authenticated account and live-stream testing remain
+pending on the target system.
 
 ## Application setup
 
