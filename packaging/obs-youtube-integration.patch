@@ -374,8 +374,8 @@ index 731a88c..f640f6b 100644
 +	QMetaObject::invokeMethod(this, [this]() {
 +		if (OBSBasic::Get()->GetAuth() != this)
 +			return;
-+		SaveInternal();
-+		config_save_safe(OBSBasic::Get()->Config(), "tmp", nullptr);
++		Auth::Save();
++		/* Auth::Save also persists the active profile configuration. */
 +	}, Qt::QueuedConnection);
 +	return true;
  }
