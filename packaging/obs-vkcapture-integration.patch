@@ -1,5 +1,5 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 81a8309..40bc4f0 100644
+index 81a8309..ff5f15c 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -89,7 +89,10 @@ if (BUILD_PLUGIN)
@@ -14,7 +14,7 @@ index 81a8309..40bc4f0 100644
          install_obs_plugin_with_data(linux-vkcapture data)
      else()
          install(TARGETS linux-vkcapture
-@@ -140,3 +143,11 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/obs_vkcapture${LAYER_SUFFIX}.json
+@@ -140,3 +143,12 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/obs_vkcapture${LAYER_SUFFIX}.json
  install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/obs-gamecapture
      src/obs-vkcapture src/obs-glcapture
      DESTINATION "${CMAKE_INSTALL_FULL_BINDIR}")
@@ -24,6 +24,7 @@ index 81a8309..40bc4f0 100644
 +foreach(capture_target linux-vkcapture VkLayer_obs_vkcapture obs_glcapture)
 +    if (TARGET ${capture_target})
 +        target_compile_options(${capture_target} PRIVATE -Wno-error)
++        set_target_properties(${capture_target} PROPERTIES C_VISIBILITY_PRESET default)
 +    endif()
 +endforeach()
 diff --git a/data/locale/en-US.ini b/data/locale/en-US.ini

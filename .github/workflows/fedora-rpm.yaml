@@ -159,6 +159,10 @@ jobs:
           test -f /opt/cherries-obs/share/vulkan/implicit_layer.d/obs_vkcapture_32.json
           readelf -h /opt/cherries-obs/lib64/libVkLayer_obs_vkcapture.so | grep -q ELF64
           readelf -h /opt/cherries-obs/lib/libVkLayer_obs_vkcapture.so | grep -q ELF32
+          nm -D /opt/cherries-obs/lib64/libVkLayer_obs_vkcapture.so | grep -q ' T OBS_Negotiate'
+          nm -D /opt/cherries-obs/lib/libVkLayer_obs_vkcapture.so | grep -q ' T OBS_Negotiate'
+          nm -D /opt/cherries-obs/lib64/obs_glcapture/libobs_glcapture.so | grep -q ' T eglSwapBuffers'
+          nm -D /opt/cherries-obs/lib/obs_glcapture/libobs_glcapture.so | grep -q ' T eglSwapBuffers'
           cherries-gamecapture /usr/bin/true 2> gamecapture-preload.txt
           if grep -E 'cannot be preloaded|symbol lookup error' gamecapture-preload.txt; then exit 1; fi
       - name: Upload experimental Fedora RPM
