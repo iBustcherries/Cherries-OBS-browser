@@ -228,7 +228,7 @@ index 46bd720..7d3b3ca 100644
  
  class OAuthStreamKey : public OAuth {
 diff --git a/frontend/oauth/YoutubeAuth.cpp b/frontend/oauth/YoutubeAuth.cpp
-index 415e5ad..5deb881 100644
+index 415e5ad..9970dd8 100644
 --- a/frontend/oauth/YoutubeAuth.cpp
 +++ b/frontend/oauth/YoutubeAuth.cpp
 @@ -1,4 +1,7 @@
@@ -239,7 +239,17 @@ index 415e5ad..5deb881 100644
  
  #ifdef BROWSER_AVAILABLE
  #include <docks/YouTubeChatDock.hpp>
-@@ -221,23 +224,33 @@ std::shared_ptr<Auth> YoutubeAuth::Login(QWidget *owner, const std::string &serv
+@@ -72,7 +75,8 @@ YoutubeAuth::~YoutubeAuth()
+ 
+ bool YoutubeAuth::RetryLogin()
+ {
+-	return true;
++	/* Never report an expired/rejected authorization as a successful login. */
++	return false;
+ }
+ 
+ void YoutubeAuth::SaveInternal()
+@@ -221,23 +225,33 @@ std::shared_ptr<Auth> YoutubeAuth::Login(QWidget *owner, const std::string &serv
  	dlg.setWindowFlags(dlg.windowFlags() & ~Qt::WindowCloseButtonHint);
  	dlg.setWindowTitle(QTStr("YouTube.Auth.WaitingAuth.Title"));
  
@@ -285,7 +295,7 @@ index 415e5ad..5deb881 100644
  
  	QString text = QTStr("YouTube.Auth.WaitingAuth.Text");
  	text = text.arg(QString("<a href='%1'>Google OAuth Service</a>").arg(url));
-@@ -262,7 +275,7 @@ std::shared_ptr<Auth> YoutubeAuth::Login(QWidget *owner, const std::string &serv
+@@ -262,7 +276,7 @@ std::shared_ptr<Auth> YoutubeAuth::Login(QWidget *owner, const std::string &serv
  	// Async Login.
  	connect(&server, &AuthListener::ok, &dlg, [&dlg, &auth_code](QString code) {
  #ifdef _DEBUG
@@ -294,7 +304,7 @@ index 415e5ad..5deb881 100644
  #endif
  		auth_code = code;
  		dlg.accept();
-@@ -287,10 +300,11 @@ std::shared_ptr<Auth> YoutubeAuth::Login(QWidget *owner, const std::string &serv
+@@ -287,10 +301,11 @@ std::shared_ptr<Auth> YoutubeAuth::Login(QWidget *owner, const std::string &serv
  	}
  
  	if (!auth->GetToken(YOUTUBE_TOKEN_URL, clientid, secret, QT_TO_UTF8(redirect_uri), YOUTUBE_SCOPE_VERSION,

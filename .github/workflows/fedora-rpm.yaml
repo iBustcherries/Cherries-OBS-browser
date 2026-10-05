@@ -67,7 +67,6 @@ jobs:
       - name: Integrate fork and download verified CEF
         env:
           CHERRIES_TWITCH_CLIENT_ID: ${{ vars.CHERRIES_TWITCH_CLIENT_ID }}
-          OBS_YOUTUBE_CLIENT_JSON: ${{ secrets.OBS_YOUTUBE_CLIENT_JSON }}
         shell: bash
         run: |
           rsync -a --delete --exclude=.git --exclude=.github browser-fork/ obs/plugins/obs-browser/
@@ -75,7 +74,6 @@ jobs:
           cp browser-fork/packaging/twitch/* obs/frontend/oauth/
           git -C obs apply ../browser-fork/packaging/obs-youtube-integration.patch
           cp browser-fork/packaging/youtube/* obs/frontend/oauth/
-          python3 browser-fork/packaging/configure-youtube-client.py obs/frontend/oauth/CherriesYouTubeBundled.hpp
           git -C obs/plugins/cherries-gamecapture apply "$GITHUB_WORKSPACE/browser-fork/packaging/obs-vkcapture-integration.patch"
           cp browser-fork/packaging/gamecapture/CherriesGameSelection.h obs/plugins/cherries-gamecapture/src/
           echo 'add_subdirectory(cherries-gamecapture)' >> obs/plugins/CMakeLists.txt
@@ -153,6 +151,16 @@ jobs:
         run: |
           dnf install -y rpmbuild/RPMS/x86_64/*.rpm
           cherries-obs-wayland --version
+          ldd -r /opt/cherries-obs/lib64/obs-modules/core/linux-vkcapture.so > gamecapture-linkage.txt 2>&1
+          if grep -E 'not found|undefined symbol' gamecapture-linkage.txt; then exit 1; fi
+          test -f /opt/cherries-obs/lib64/obs_glcapture/libobs_glcapture.so
+          test -f /opt/cherries-obs/lib/obs_glcapture/libobs_glcapture.so
+          test -f /opt/cherries-obs/share/vulkan/implicit_layer.d/obs_vkcapture_64.json
+          test -f /opt/cherries-obs/share/vulkan/implicit_layer.d/obs_vkcapture_32.json
+          readelf -h /opt/cherries-obs/lib64/libVkLayer_obs_vkcapture.so | grep -q ELF64
+          readelf -h /opt/cherries-obs/lib/libVkLayer_obs_vkcapture.so | grep -q ELF32
+          cherries-gamecapture /usr/bin/true 2> gamecapture-preload.txt
+          if grep -E 'cannot be preloaded|symbol lookup error' gamecapture-preload.txt; then exit 1; fi
       - name: Upload experimental Fedora RPM
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:

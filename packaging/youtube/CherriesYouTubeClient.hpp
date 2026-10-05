@@ -1,6 +1,5 @@
 #pragma once
 #include "CherriesYouTubeProtocol.hpp"
-#include "CherriesYouTubeBundled.hpp"
 #include <OBSApp.hpp>
 #include <widgets/OBSBasic.hpp>
 #include <QFile>
@@ -17,9 +16,8 @@ inline CherriesYouTubeCredentials CherriesYouTubeClient(QWidget *owner = nullptr
 		if (client.valid())
 			return client;
 	}
-	const auto bundled = CherriesParseYouTubeClient(QByteArray(CherriesBundledYouTubeJSON));
-	if (bundled.valid() || !ask)
-		return bundled;
+	if (!ask)
+		return {};
 	QMessageBox::information(
 		owner, "Connect YouTube",
 		"This build needs a Google Desktop application OAuth client. Enable the YouTube Data API v3 in your "

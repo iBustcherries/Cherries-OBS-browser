@@ -18,11 +18,8 @@ not require importing them again. Testing projects must include your Google
 account as a test user; their refresh tokens may expire after seven days.
 Production availability is subject to Google's verification and quota rules.
 
-Alternatively, the owner can set the private repository Actions secret
-OBS_YOUTUBE_CLIENT_JSON before building. The workflow generates a build-only
-header. No Google credentials are committed. Desktop clients are distributed
-applications, so an embedded client secret is not confidential from someone
-who has the installed binary. Never use a Web application client here.
+Credentials are imported locally and never embedded in CI artifacts or committed
+to the repository. Use a Desktop app client rather than a Web application client.
 
 The adaptation requests offline access, uses PKCE S256, URL-encodes form values,
 accumulates fragmented callback requests and validates state and unique query
