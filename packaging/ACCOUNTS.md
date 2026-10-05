@@ -179,11 +179,13 @@ is needed for the output; Studio's website session is separate, as before.
 
 ### Release 10 validation status
 
-The earlier platform changes passed the release 9 Fedora compile. Portrait
-geometry and shared-encoder/audio routing tests pass locally, as do syntax checks
-for the new dock and modified controls. Full release 10 Fedora packaging and
-installation checks are pending. Authenticated account, target Wayland desktop,
-and live dual-format testing remain pending on the target system.
+Release 10 passed the five regression checks, full Fedora 44 compilation, RPM
+packaging, clean installation and executable-loading verification in
+[workflow run 37261031797](https://github.com/iBustcherries/Cherries-OBS-browser/actions/runs/37261031797),
+built from source revision `8d5e90a93114e2a4962edf7a3a1c334db45a372e`.
+The downloaded artifact's checksum matched GitHub's published digest.
+Authenticated account, target KDE/Wayland interaction and live dual-format
+streaming tests remain pending on the target system.
 
 ## Application setup
 
