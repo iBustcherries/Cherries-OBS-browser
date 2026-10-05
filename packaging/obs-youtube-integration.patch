@@ -318,7 +318,7 @@ index 415e5ad..9970dd8 100644
  	config_remove_value(config, "YouTube", "ChannelName");
  
 diff --git a/frontend/utility/YoutubeApiWrappers.cpp b/frontend/utility/YoutubeApiWrappers.cpp
-index 731a88c..6f60902 100644
+index 731a88c..f640f6b 100644
 --- a/frontend/utility/YoutubeApiWrappers.cpp
 +++ b/frontend/utility/YoutubeApiWrappers.cpp
 @@ -1,4 +1,5 @@
@@ -353,7 +353,7 @@ index 731a88c..6f60902 100644
  	Json json_out;
  	bool success = TryInsertCommand(youtubeLiveTokenUrl.data(), "application/x-www-form-urlencoded", "",
  					QT_TO_UTF8(data), json_out);
-@@ -129,14 +132,25 @@ bool YoutubeApiWrappers::UpdateAccessToken()
+@@ -129,14 +132,31 @@ bool YoutubeApiWrappers::UpdateAccessToken()
  	if (!success || json_out.object_items().find("error") != json_out.object_items().end()) {
  		return false;
  	}
@@ -369,8 +369,14 @@ index 731a88c..6f60902 100644
 +		refresh_token = nextRefresh;
 +	}
 +	expire_time = (uint64_t)time(nullptr) + json_out["expires_in"].int_value();
-+	SaveInternal();
-+	config_save_safe(OBSBasic::Get()->Config(), "tmp", nullptr);
++	/* API calls may run on workers; dock/config persistence belongs to the
++	 * auth object's GUI thread and must not update a different profile. */
++	QMetaObject::invokeMethod(this, [this]() {
++		if (OBSBasic::Get()->GetAuth() != this)
++			return;
++		SaveInternal();
++		config_save_safe(OBSBasic::Get()->Config(), "tmp", nullptr);
++	}, Qt::QueuedConnection);
 +	return true;
  }
  
