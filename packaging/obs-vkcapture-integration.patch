@@ -1,5 +1,5 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 81a8309..ff5f15c 100644
+index 81a8309..3f6af3c 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -89,7 +89,10 @@ if (BUILD_PLUGIN)
@@ -24,7 +24,7 @@ index 81a8309..ff5f15c 100644
 +foreach(capture_target linux-vkcapture VkLayer_obs_vkcapture obs_glcapture)
 +    if (TARGET ${capture_target})
 +        target_compile_options(${capture_target} PRIVATE -Wno-error)
-+        set_target_properties(${capture_target} PROPERTIES C_VISIBILITY_PRESET default)
++        set_target_properties(${capture_target} PROPERTIES C_VISIBILITY_PRESET default COMPILE_WARNING_AS_ERROR OFF)
 +    endif()
 +endforeach()
 diff --git a/data/locale/en-US.ini b/data/locale/en-US.ini
