@@ -315,7 +315,7 @@ void QCefBrowserClient::OnBeforeContextMenu(CefRefPtr<CefBrowser> browser, CefRe
 }
 
 #if defined(_WIN32) || defined(__linux__)
-bool QCefBrowserClient::RunContextMenu(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, CefRefPtr<CefContextMenuParams>,
+bool QCefBrowserClient::RunContextMenu(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame>, CefRefPtr<CefContextMenuParams> params,
 				       CefRefPtr<CefMenuModel> model, CefRefPtr<CefRunContextMenuCallback> callback)
 {
 #ifdef __linux__
@@ -329,7 +329,9 @@ bool QCefBrowserClient::RunContextMenu(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame
 				      model->GetTypeAt(i), model->IsCheckedAt(i)});
 	}
 
-	QMetaObject::invokeMethod(QCoreApplication::instance(), [menu_items, callback]() {
+	auto host = browser->GetHost();
+	const bool nativePaste = widget && widget->windowless && params->IsEditable();
+	QMetaObject::invokeMethod(QCoreApplication::instance(), [menu_items, callback, host, nativePaste]() {
 		QMenu contextMenu;
 		std::string name;
 		int command_id;
@@ -343,7 +345,9 @@ bool QCefBrowserClient::RunContextMenu(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame
 			case MENUITEMTYPE_CHECK:
 			case MENUITEMTYPE_COMMAND: {
 				QAction *item = new QAction(name.c_str(), &contextMenu);
-				item->setEnabled(enabled);
+				item->setEnabled(command_id == MENU_ID_PASTE && nativePaste
+						 ? !QApplication::clipboard()->text().isEmpty()
+						 : enabled);
 				if (type_id == MENUITEMTYPE_CHECK) {
 					item->setCheckable(true);
 					item->setChecked(check);
@@ -360,6 +364,11 @@ bool QCefBrowserClient::RunContextMenu(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame
 		QAction *action = contextMenu.exec(QCursor::pos());
 		if (action) {
 			QVariant cmdId = action->property("cmd_id");
+			if (cmdId.toInt() == MENU_ID_PASTE && nativePaste) {
+				QueueCEFTask([callback]() { callback->Cancel(); });
+				PasteBrowserClipboard(host);
+				return;
+			}
 			QueueCEFTask([callback, id = cmdId.toInt()]() { callback->Continue(id, EVENTFLAG_NONE); });
 		} else {
 			QueueCEFTask([callback]() { callback->Cancel(); });

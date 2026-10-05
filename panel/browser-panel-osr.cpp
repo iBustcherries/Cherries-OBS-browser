@@ -1,10 +1,12 @@
 #include "browser-panel-internal.hpp"
 
 #include <QApplication>
+#include <QClipboard>
 #include <QCursor>
 #include <QFocusEvent>
 #include <QInputMethodEvent>
 #include <QKeyEvent>
+#include <QKeySequence>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QWheelEvent>
@@ -312,7 +314,22 @@ void QCefWidgetInternal::keyPressEvent(QKeyEvent *event)
 		QWidget::keyPressEvent(event);
 		return;
 	}
+	if (event->matches(QKeySequence::Paste)) {
+		if (cefBrowser)
+			PasteBrowserClipboard(cefBrowser->GetHost());
+		event->accept();
+		return;
+	}
 	sendKey(event, false);
+}
+
+void PasteBrowserClipboard(CefRefPtr<CefBrowserHost> host)
+{
+	// CEF's Linux clipboard may use X11 while Qt owns the Wayland clipboard.
+	// Commit through the browser editor so selection, Unicode and undo work.
+	std::u16string text = QApplication::clipboard()->text().toStdU16String();
+	if (!text.empty())
+		QueueCEFTask([host, text]() { host->ImeCommitText(text, CefRange(UINT32_MAX, UINT32_MAX), 0); });
 }
 
 void QCefWidgetInternal::keyReleaseEvent(QKeyEvent *event)

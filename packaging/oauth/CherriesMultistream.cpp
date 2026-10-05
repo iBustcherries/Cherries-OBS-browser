@@ -740,17 +740,18 @@ void CherriesMultistream::Manage()
 		if (!twitch->cookies)
 			twitch->cookies.reset(
 				cef->create_cookie_manager("cherries-twitch-" + hash.toStdString(), true));
-		twitchLayout->addWidget(
-			new QLabel("Twitch account: " + twitch->label +
-					   " — sign in to this account in the embedded page if prompted.",
-				   twitchPage));
+		auto accountLabel = new QLabel("Twitch account: " + twitch->label +
+					      " — sign in to this account in the embedded page if prompted.",
+					      twitchPage);
+		accountLabel->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+		twitchLayout->addWidget(accountLabel);
 		browser = cef->create_widget(twitchPage,
 					     "https://dashboard.twitch.tv/popout/u/" +
 						     dynamic_cast<TwitchAuth *>(twitch->auth.get())->name +
 						     "/stream-manager/edit-stream-info",
 					     twitch->cookies.get());
 		if (browser)
-			twitchLayout->addWidget(browser);
+			twitchLayout->addWidget(browser, 1);
 	} else
 		twitchLayout->addWidget(new QLabel(
 			"Connect a Twitch account in Settings → Stream to edit its stream info.", twitchPage));
@@ -758,8 +759,7 @@ void CherriesMultistream::Manage()
 		OBSYoutubeActions editor(&window, youtube->auth.get(), false);
 		editor.setWindowFlags(Qt::Widget);
 		editor.SetCombinedPage(twitchPage);
-		layout->addWidget(new QLabel("YouTube account: " + youtube->label, &window));
-		layout->addWidget(&editor);
+		layout->addWidget(&editor, 1);
 		connect(&editor, &OBSYoutubeActions::rejected, &window, &QDialog::reject);
 		connect(&editor, &OBSYoutubeActions::ok, &window,
 			[&, youtube](const std::string &broadcast, const std::string &, const std::string &key,
