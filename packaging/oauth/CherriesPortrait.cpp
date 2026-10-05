@@ -345,6 +345,25 @@ class PortraitDock : public QWidget {
 		links->setCurrentIndex(std::max(
 			0, links->findData(QString::fromUtf8(obs_data_get_string(data, "cherries_landscape")))));
 	}
+	void LinkScene(obs_scene_t *target, const QString &uuid)
+	{
+		if (!target)
+			return;
+		if (!uuid.isEmpty()) {
+			obs_canvas_enum_scenes(
+				canvas,
+				[](void *data, obs_source_t *source) {
+					OBSDataAutoRelease settings = obs_source_get_private_settings(source);
+					if (*static_cast<const QString *>(data) ==
+					    QString::fromUtf8(obs_data_get_string(settings, "cherries_landscape")))
+						obs_data_erase(settings, "cherries_landscape");
+					return true;
+				},
+				const_cast<QString *>(&uuid));
+		}
+		OBSDataAutoRelease settings = obs_source_get_private_settings(obs_scene_get_source(target));
+		obs_data_set_string(settings, "cherries_landscape", uuid.toUtf8().constData());
+	}
 	void FollowScene()
 	{
 		if (!follow->isChecked() || !canvas)
@@ -439,9 +458,7 @@ class PortraitDock : public QWidget {
 						return true;
 					},
 					const_cast<double *>(&scale));
-				OBSDataAutoRelease settings =
-					obs_source_get_private_settings(obs_scene_get_source(added));
-				obs_data_set_string(settings, "cherries_landscape", obs_source_get_uuid(source));
+				LinkScene(added, Uuid(source));
 			}
 		}
 		SelectScene(Uuid(obs_scene_get_source(added)));
@@ -783,22 +800,7 @@ public:
 		connect(links, qOverload<int>(&QComboBox::currentIndexChanged), this, [this]() {
 			if (loading || !scene)
 				return;
-			const auto uuid = links->currentData().toString();
-			if (!uuid.isEmpty()) {
-				obs_canvas_enum_scenes(
-					canvas,
-					[](void *data, obs_source_t *source) {
-						OBSDataAutoRelease settings = obs_source_get_private_settings(source);
-						if (*static_cast<const QString *>(data) ==
-						    QString::fromUtf8(
-							    obs_data_get_string(settings, "cherries_landscape")))
-							obs_data_erase(settings, "cherries_landscape");
-						return true;
-					},
-					const_cast<QString *>(&uuid));
-			}
-			OBSDataAutoRelease settings = obs_source_get_private_settings(obs_scene_get_source(scene));
-			obs_data_set_string(settings, "cherries_landscape", uuid.toUtf8().constData());
+			LinkScene(scene, links->currentData().toString());
 			Changed();
 		});
 		connect(addSource, &QPushButton::clicked, this, [this]() { AddSource(); });
