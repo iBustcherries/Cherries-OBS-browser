@@ -118,10 +118,11 @@ struct QCefCookieManagerInternal : QCefCookieManager {
 		settings.persist_user_preferences = 1;
 #endif
 		CefString(&settings.cache_path) = path.Get();
-		settings.persist_session_cookies = persist_session_cookies;
 		rc = CefRequestContext::CreateContext(settings, CefRefPtr<CefRequestContextHandler>());
 		if (rc)
 			cm = rc->GetCookieManager(nullptr);
+
+		UNUSED_PARAMETER(persist_session_cookies);
 	}
 
 	virtual bool DeleteCookies(const std::string &url, const std::string &name) override
@@ -138,12 +139,12 @@ struct QCefCookieManagerInternal : QCefCookieManager {
 #if CHROME_VERSION_BUILD <= 6533
 		settings.persist_user_preferences = 1;
 #endif
-		CefString(&settings.cache_path) = path.Get();
-		settings.persist_session_cookies = persist_session_cookies;
+		CefString(&settings.cache_path) = storage_path;
 		rc = CefRequestContext::CreateContext(settings, CefRefPtr<CefRequestContextHandler>());
 		if (rc)
 			cm = rc->GetCookieManager(nullptr);
 
+		UNUSED_PARAMETER(persist_session_cookies);
 		return true;
 	}
 
