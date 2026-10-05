@@ -1,5 +1,5 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 81a8309..136001e 100644
+index 81a8309..a091f3e 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -65,7 +65,11 @@ if (BUILD_PLUGIN)
@@ -15,7 +15,7 @@ index 81a8309..136001e 100644
      set(PLUGIN_LIBS ${PLUGIN_LIBS} obs-frontend-api PkgConfig::EGL)
      if (HAVE_X11_XCB)
          set(PLUGIN_SOURCES ${PLUGIN_SOURCES} src/xcursor-xcb.c)
-@@ -85,11 +89,15 @@ if (BUILD_PLUGIN)
+@@ -85,11 +89,16 @@ if (BUILD_PLUGIN)
          set(PLUGIN_LIBS ${PLUGIN_LIBS} PkgConfig::WAYLAND_CLIENT)
      endif()
      add_library(linux-vkcapture MODULE ${PLUGIN_SOURCES})
@@ -28,12 +28,13 @@ index 81a8309..136001e 100644
 -    if (COMMAND install_obs_plugin_with_data)
 +    if (COMMAND set_target_properties_obs)
 +        set_target_properties_obs(linux-vkcapture PROPERTIES FOLDER plugins PREFIX "")
++        set_property(TARGET linux-vkcapture PROPERTY INSTALL_RPATH "$ORIGIN;$ORIGIN/../..")
 +        install(DIRECTORY data/ DESTINATION "${OBS_DATA_DESTINATION}/obs-modules/core/linux-vkcapture")
 +    elseif (COMMAND install_obs_plugin_with_data)
          install_obs_plugin_with_data(linux-vkcapture data)
      else()
          install(TARGETS linux-vkcapture
-@@ -140,3 +148,12 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/obs_vkcapture${LAYER_SUFFIX}.json
+@@ -140,3 +149,12 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/obs_vkcapture${LAYER_SUFFIX}.json
  install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/obs-gamecapture
      src/obs-vkcapture src/obs-glcapture
      DESTINATION "${CMAKE_INSTALL_FULL_BINDIR}")
