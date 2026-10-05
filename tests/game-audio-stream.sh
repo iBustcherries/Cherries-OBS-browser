@@ -18,6 +18,10 @@ context.objects = [
 EOF
 pipewire > "$XDG_RUNTIME_DIR/pipewire.log" 2>&1 &
 server=$!
+for attempt in {1..30}; do
+    if [ -S "$XDG_RUNTIME_DIR/pipewire-0" ]; then break; fi
+    sleep 0.2
+done
 wireplumber > "$XDG_RUNTIME_DIR/wireplumber.log" 2>&1 &
 manager=$!
 player=''
