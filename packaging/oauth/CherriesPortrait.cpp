@@ -44,23 +44,32 @@ class PortraitPreview : public OBSQTDisplay {
 	static void Draw(void *data, uint32_t cx, uint32_t cy)
 	{
 		auto self = static_cast<PortraitPreview *>(data);
-		std::lock_guard lock(self->mutex);
-		if (!self->canvas || obs_canvas_removed(self->canvas))
+		OBSCanvas canvas;
+		OBSSceneItem selected;
+		uint32_t canvasWidth, canvasHeight;
+		{
+			std::lock_guard lock(self->mutex);
+			canvas = self->canvas;
+			selected = self->selected;
+			canvasWidth = self->canvasWidth;
+			canvasHeight = self->canvasHeight;
+		}
+		if (!canvas || obs_canvas_removed(canvas))
 			return;
-		const auto view = CherriesPortraitGeometry::Fit(self->canvasWidth, self->canvasHeight, cx, cy);
+		const auto view = CherriesPortraitGeometry::Fit(canvasWidth, canvasHeight, cx, cy);
 		if (!view.scale)
 			return;
 		gs_viewport_push();
 		gs_projection_push();
 		gs_matrix_push();
 		gs_matrix_identity();
-		gs_set_viewport(int(view.x), int(view.y), int(self->canvasWidth * view.scale),
-				int(self->canvasHeight * view.scale));
-		gs_ortho(0, float(self->canvasWidth), 0, float(self->canvasHeight), -100, 100);
-		obs_canvas_render(self->canvas);
-		if (self->selected && obs_sceneitem_get_scene(self->selected)) {
+		gs_set_viewport(int(view.x), int(view.y), int(canvasWidth * view.scale),
+				int(canvasHeight * view.scale));
+		gs_ortho(0, float(canvasWidth), 0, float(canvasHeight), -100, 100);
+		obs_canvas_render(canvas);
+		if (selected && obs_sceneitem_get_scene(selected)) {
 			matrix4 box;
-			obs_sceneitem_get_box_transform(self->selected, &box);
+			obs_sceneitem_get_box_transform(selected, &box);
 			gs_matrix_mul(&box);
 			auto effect = obs_get_base_effect(OBS_EFFECT_SOLID);
 			gs_effect_set_color(gs_effect_get_param_by_name(effect, "color"), 0xFF48D9FF);
@@ -181,18 +190,28 @@ public:
 	}
 	void SetCanvas(obs_canvas_t *value, uint32_t width, uint32_t height)
 	{
-		std::lock_guard lock(mutex);
-		selected = nullptr;
-		dragging = false;
-		canvas = value;
-		canvasWidth = width;
-		canvasHeight = height;
+		// Releasing a final OBS reference can acquire the graphics lock. Keep it outside our mutex.
+		OBSCanvas previousCanvas;
+		OBSSceneItem previousItem;
+		{
+			std::lock_guard lock(mutex);
+			previousCanvas = std::move(canvas);
+			previousItem = std::move(selected);
+			dragging = false;
+			canvas = value;
+			canvasWidth = width;
+			canvasHeight = height;
+		}
 	}
 	void SetSelected(obs_sceneitem_t *item)
 	{
-		std::lock_guard lock(mutex);
-		selected = item;
-		dragging = false;
+		OBSSceneItem previousItem;
+		{
+			std::lock_guard lock(mutex);
+			previousItem = std::move(selected);
+			selected = item;
+			dragging = false;
+		}
 	}
 };
 
