@@ -32,5 +32,20 @@ Steam runtime and games. The host library build cannot be injected into
 Flatpak Steam's sandbox: that installation requires the corresponding Flatpak
 obs-vkcapture runtime extension and launch configuration.
 
-This source captures video, not per-game audio. Use OBS audio sources normally.
+Game Capture also includes PipeWire application audio, enabled by default with
+its Capture game audio checkbox. The selected game's host process ID comes
+from the capture socket's kernel credentials. Audio follows that process and
+its descendants and stops when the source is hidden or the game disconnects.
+The source has one normal OBS mixer channel: volume, mute, monitoring, filters
+and track assignments apply to its audio. This does not change the game's
+existing speaker/headphone output. If Desktop Audio captures the same device,
+disable that Desktop Audio capture to avoid recording the game twice.
+
+The backend reuses obs-pipewire-audio-capture at
+6120aa622792908e4529b0e171b2acce5efb3f18. It matches PipeWire process metadata,
+including PulseAudio-compatible streams, instead of recording the full desktop
+monitor. Processes without usable PID metadata or separate unrelated audio
+helper processes may require explicit application-audio routing. Capture
+needs the user's PipeWire server; it does not silently fall back to desktop
+sound if no game stream matches.
 VkCapture is upstream GPL-2.0-or-later code; its license is included in the RPM.

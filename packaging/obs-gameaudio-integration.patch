@@ -1,0 +1,208 @@
+diff --git a/src/pipewire-audio-capture-app.c b/src/pipewire-audio-capture-app.c
+index 936e416..dca136a 100644
+--- a/src/pipewire-audio-capture-app.c
++++ b/src/pipewire-audio-capture-app.c
+@@ -19,6 +19,8 @@
+  */
+ 
+ #include "pipewire-audio.h"
++#include "CherriesGameAudio.h"
++#include "CherriesAudioTarget.h"
+ 
+ #include <spa/debug/types.h>
+ 
+@@ -32,9 +34,11 @@ struct target_node_port {
+ };
+ 
+ struct target_node {
++	struct obs_pw_audio_capture_app *owner;
+ 	const char *name;
+ 	const char *app_name;
+ 	const char *binary;
++	pid_t process_id;
+ 	uint32_t client_id;
+ 	uint32_t id;
+ 	struct obs_pw_audio_proxy_list ports;
+@@ -44,6 +48,8 @@ struct target_node {
+ };
+ 
+ struct target_client {
++	struct obs_pw_audio_capture_app *owner;
++	pid_t process_id;
+ 	const char *app_name;
+ 	const char *binary;
+ 	uint32_t id;
+@@ -120,12 +126,16 @@ struct obs_pw_audio_capture_app {
+ 	struct obs_pw_audio_proxy_list nodes;
+ 	uint32_t n_nodes;
+ 
++	bool game_audio_mode;
++	pid_t game_pid;
+ 	enum capture_mode capture_mode;
+ 	enum match_priority match_priority;
+ 	bool except;
+ 	DARRAY(const char *) selections;
+ };
+ 
++static void connect_targets(struct obs_pw_audio_capture_app *pwac);
++
+ /* System sinks */
+ static void system_sink_destroy_cb(void *data)
+ {
+@@ -166,13 +176,16 @@ static void on_client_info_cb(void *data, const struct pw_client_info *info)
+ 	}
+ 
+ 	const char *binary = spa_dict_lookup(info->props, PW_KEY_APP_PROCESS_BINARY);
+-	if (!binary) {
+-		return;
+-	}
+-
+ 	struct target_client *client = data;
++	const char *pid = spa_dict_lookup(info->props, "pipewire.sec.pid");
++	if (!pid)
++		pid = spa_dict_lookup(info->props, PW_KEY_APP_PROCESS_ID);
++	if (pid)
++		client->process_id = (pid_t)strtol(pid, NULL, 10);
+ 	bfree((void *)client->binary);
+ 	client->binary = bstrdup(binary);
++	if (client->owner->game_audio_mode)
++		connect_targets(client->owner);
+ }
+ 
+ static const struct pw_client_events client_events = {
+@@ -189,6 +202,8 @@ static void register_target_client(struct obs_pw_audio_capture_app *pwac, uint32
+ 	}
+ 
+ 	struct target_client *client = pw_proxy_get_user_data(client_proxy);
++	client->owner = pwac;
++	client->process_id = 0;
+ 	client->binary = NULL;
+ 	client->app_name = bstrdup(app_name);
+ 	client->id = global_id;
+@@ -244,13 +259,14 @@ static void on_node_info_cb(void *data, const struct pw_node_info *info)
+ 	}
+ 
+ 	const char *binary = spa_dict_lookup(info->props, PW_KEY_APP_PROCESS_BINARY);
+-	if (!binary) {
+-		return;
+-	}
+-
+ 	struct target_node *node = data;
++	const char *pid = spa_dict_lookup(info->props, PW_KEY_APP_PROCESS_ID);
++	if (pid)
++		node->process_id = (pid_t)strtol(pid, NULL, 10);
+ 	bfree((void *)node->binary);
+ 	node->binary = bstrdup(binary);
++	if (node->owner->game_audio_mode)
++		connect_targets(node->owner);
+ }
+ 
+ static const struct pw_node_events node_events = {
+@@ -268,6 +284,8 @@ static void register_target_node(struct obs_pw_audio_capture_app *pwac, uint32_t
+ 	}
+ 
+ 	struct target_node *node = pw_proxy_get_user_data(node_proxy);
++	node->owner = pwac;
++	node->process_id = 0;
+ 	node->name = bstrdup(name);
+ 	node->app_name = bstrdup(app_name);
+ 	node->binary = NULL;
+@@ -284,6 +302,20 @@ static void register_target_node(struct obs_pw_audio_capture_app *pwac, uint32_t
+ 
+ static bool node_is_targeted(struct obs_pw_audio_capture_app *pwac, struct target_node *node)
+ {
++	if (pwac->game_audio_mode) {
++		pid_t audio_pid = node->process_id;
++		struct obs_pw_audio_proxy_list_iter iter;
++		obs_pw_audio_proxy_list_iter_init(&iter, &pwac->clients);
++		struct target_client *client;
++		while (obs_pw_audio_proxy_list_iter_next(&iter, (void **)&client)) {
++			if (client->id == node->client_id && client->process_id > 1 &&
++			    client->binary && strcmp(client->binary, "pipewire-pulse") != 0) {
++				audio_pid = client->process_id;
++				break;
++			}
++		}
++		return cherries_audio_matches_process(pwac->game_pid, audio_pid, cherries_audio_process_parent);
++	}
+ 	bool targeted = false;
+ 	for (size_t i = 0; i < pwac->selections.num && !targeted; i++) {
+ 		const char *selection = pwac->selections.array[i];
+@@ -435,6 +467,8 @@ static void finalize_capture_sink(struct obs_pw_audio_capture_app *pwac)
+ 		blog(LOG_WARNING, "[pipewire-audio] Error connecting stream %p to app capture sink %u",
+ 		     pwac->pw.audio.stream, pwac->sink.id);
+ 	}
++	if (pwac->game_audio_mode)
++		pw_stream_set_active(pwac->pw.audio.stream, pwac->game_pid > 1);
+ }
+ 
+ static void on_sink_proxy_bound_cb(void *data, uint32_t global_id)
+@@ -1059,6 +1093,8 @@ static void *pipewire_audio_capture_app_create(obs_data_t *settings, obs_source_
+ 	pwac->sink.id = SPA_ID_INVALID;
+ 	dstr_init(&pwac->sink.position);
+ 
++	pwac->game_audio_mode = obs_data_get_bool(settings, "CherriesGameAudio");
++	pwac->game_pid = (pid_t)obs_data_get_int(settings, "CherriesGamePid");
+ 	pwac->capture_mode = obs_data_get_int(settings, SETTING_CAPTURE_MODE);
+ 	pwac->match_priority = obs_data_get_int(settings, SETTING_MATCH_PRIORITY);
+ 	pwac->except = obs_data_get_bool(settings, SETTING_EXCLUDE_SELECTIONS);
+@@ -1111,6 +1147,8 @@ static void pipewire_audio_capture_app_update(void *data, obs_data_t *settings)
+ 
+ 	pw_thread_loop_lock(pwac->pw.thread_loop);
+ 
++	pwac->game_audio_mode = obs_data_get_bool(settings, "CherriesGameAudio");
++	pwac->game_pid = (pid_t)obs_data_get_int(settings, "CherriesGamePid");
+ 	pwac->capture_mode = obs_data_get_int(settings, SETTING_CAPTURE_MODE);
+ 	pwac->match_priority = obs_data_get_int(settings, SETTING_MATCH_PRIORITY);
+ 	pwac->except = obs_data_get_bool(settings, SETTING_EXCLUDE_SELECTIONS);
+@@ -1119,6 +1157,8 @@ static void pipewire_audio_capture_app_update(void *data, obs_data_t *settings)
+ 	build_selections(pwac, settings);
+ 
+ 	connect_targets(pwac);
++	if (pwac->game_audio_mode)
++		pw_stream_set_active(pwac->pw.audio.stream, pwac->game_pid > 1);
+ 
+ 	pw_thread_loop_unlock(pwac->pw.thread_loop);
+ }
+@@ -1196,3 +1236,28 @@ void pipewire_audio_capture_app_load(void)
+ 
+ 	obs_register_source(&pipewire_audio_capture_application);
+ }
++
++/* VkCapture owns this backend directly, so audio is emitted on the Game
++ * Capture source rather than on an independent hidden mixer source. */
++void *cherries_game_audio_create(obs_source_t *source)
++{
++	obs_data_t *settings = obs_data_create();
++	obs_data_set_bool(settings, "CherriesGameAudio", true);
++	obs_data_set_string(settings, SETTING_SELECTION_SINGLE, "__cherries_waiting_for_game__");
++	void *capture = pipewire_audio_capture_app_create(settings, source);
++	obs_data_release(settings);
++	return capture;
++}
++void cherries_game_audio_set_pid(void *capture, pid_t pid)
++{
++	obs_data_t *settings = obs_data_create();
++	obs_data_set_bool(settings, "CherriesGameAudio", true);
++	obs_data_set_int(settings, "CherriesGamePid", pid);
++	obs_data_set_string(settings, SETTING_SELECTION_SINGLE, "__cherries_selected_game__");
++	pipewire_audio_capture_app_update(capture, settings);
++	obs_data_release(settings);
++}
++void cherries_game_audio_destroy(void *capture)
++{
++	pipewire_audio_capture_app_destroy(capture);
++}
+diff --git a/src/pipewire-audio.c b/src/pipewire-audio.c
+index 13cb453..4044c3b 100644
+--- a/src/pipewire-audio.c
++++ b/src/pipewire-audio.c
+@@ -201,7 +201,7 @@ static void on_process_cb(void *data)
+ 		out.data[i] = buf->datas[i].data;
+ 	}
+ 
+-	if (s->info.sample_rate && s->pos->clock.rate_diff) {
++	if (s->info.sample_rate && s->pos && s->pos->clock.rate_diff) {
+ 		/** Taken from PipeWire's implementation of JACK's jack_get_cycle_times
+ 		  * (https://gitlab.freedesktop.org/pipewire/pipewire/-/blob/0.3.52/pipewire-jack/src/pipewire-jack.c#L5639)
+ 		  * which is used in the linux-jack plugin to correctly set the timestamp
