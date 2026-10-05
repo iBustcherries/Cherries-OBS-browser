@@ -1,0 +1,14 @@
+#!/bin/sh
+if [ "$#" -eq 0 ]; then
+    echo 'Usage: cherries-gamecapture COMMAND [ARGUMENTS...]' >&2
+    exit 2
+fi
+# Leave the loader's architecture token literal for both 32- and 64-bit games.
+capture_library='/opt/cherries-obs/$LIB/obs_glcapture/libobs_glcapture.so'
+export LD_PRELOAD="${LD_PRELOAD}${LD_PRELOAD:+:}${capture_library}"
+export OBS_VKCAPTURE=1
+export VK_ADD_IMPLICIT_LAYER_PATH="/opt/cherries-obs/share/vulkan/implicit_layer.d${VK_ADD_IMPLICIT_LAYER_PATH:+:${VK_ADD_IMPLICIT_LAYER_PATH}}"
+export XDG_DATA_DIRS="/opt/cherries-obs/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+export STEAM_COMPAT_MOUNTS="/opt/cherries-obs${STEAM_COMPAT_MOUNTS:+:${STEAM_COMPAT_MOUNTS}}"
+export PRESSURE_VESSEL_FILESYSTEMS_RO="/opt/cherries-obs${PRESSURE_VESSEL_FILESYSTEMS_RO:+:${PRESSURE_VESSEL_FILESYSTEMS_RO}}"
+exec "$@"

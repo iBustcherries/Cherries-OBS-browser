@@ -1,0 +1,54 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 81a8309..c9b5f55 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -89,7 +89,10 @@ if (BUILD_PLUGIN)
+     set_target_properties(linux-vkcapture PROPERTIES PREFIX "")
+     target_include_directories(linux-vkcapture PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>)
+ 
+-    if (COMMAND install_obs_plugin_with_data)
++    if (COMMAND set_target_properties_obs)
++        set_target_properties_obs(linux-vkcapture PROPERTIES FOLDER plugins PREFIX "")
++        install(DIRECTORY data/ DESTINATION "${OBS_DATA_DESTINATION}/obs-modules/core/linux-vkcapture")
++    elseif (COMMAND install_obs_plugin_with_data)
+         install_obs_plugin_with_data(linux-vkcapture data)
+     else()
+         install(TARGETS linux-vkcapture
+diff --git a/data/locale/en-US.ini b/data/locale/en-US.ini
+index e2bb081..912713e 100644
+--- a/data/locale/en-US.ini
++++ b/data/locale/en-US.ini
+@@ -2,6 +2,6 @@ GameCapture="Game Capture"
+ Description="Linux Vulkan/OpenGL game capture"
+ CaptureCursor="Capture Cursor"
+ CaptureWindow="Window"
+-CaptureAnyWindow="Capture any window"
++CaptureAnyWindow="Automatic (latest compatible game)"
+ CaptureAnyWindowExcept="Capture any window except"
+ AllowTransparency="Allow Transparency"
+diff --git a/src/vkcapture.c b/src/vkcapture.c
+index b974e22..843aede 100644
+--- a/src/vkcapture.c
++++ b/src/vkcapture.c
+@@ -1,3 +1,4 @@
++#include "CherriesGameSelection.h"
+ /*
+ OBS Linux Vulkan/OpenGL game capture
+ Copyright (C) 2021 David Rosca <nowrep@gmail.com>
+@@ -376,8 +377,14 @@ static vkcapture_client_t *find_matching_client(vkcapture_source_t *ctx)
+                 break;
+             }
+         }
+-    } else if (server.clients.num) {
+-        client = server.clients.array + server.clients.num - 1;
++    } else {
++        for (size_t i = server.clients.num; i > 0; --i) {
++            vkcapture_client_t *candidate = server.clients.array + i - 1;
++            if (cherries_is_game_candidate(candidate->cdata.exe)) {
++                client = candidate;
++                break;
++            }
++        }
+     }
+     return client;
+ }

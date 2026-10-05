@@ -4,18 +4,22 @@
 
 Name: cherries-obs-wayland
 Version: 0.1
-Release: 13.experimental%{?dist}
+Release: 14.experimental%{?dist}
 Summary: Experimental OBS build with Wayland browser docks
 License: GPL-2.0-or-later AND BSD-3-Clause
 URL: https://github.com/iBustcherries/Cherries-OBS-browser
 Requires: fontconfig
 Requires: qt6-qtwayland
 Requires: mesa-libEGL
+Requires: vulkan-loader
+Requires: procps-ng
+Requires: zenity
 
 %description
 Experimental OBS Studio and CEF build using off-screen browser docks on
 Wayland. Installed under /opt/cherries-obs with a separate launcher.
-Includes native OBS Twitch accounts, docks, VOD audio and Enhanced Broadcasting.
+Includes native OBS Twitch and YouTube integration, plus automatic selection
+of compatible Vulkan/OpenGL games using VkCapture.
 DevTools and full IME support are incomplete.
 
 %prep
@@ -25,6 +29,18 @@ DevTools and full IME support are incomplete.
 %install
 mkdir -p %{buildroot}/opt %{buildroot}/usr/bin %{buildroot}/usr/share/applications
 cp -a %{stage_dir}/opt/cherries-obs %{buildroot}/opt/
+install -m 0755 %{stage_dir}/../browser-fork/packaging/gamecapture/cherries-gamecapture %{buildroot}/usr/bin/cherries-gamecapture
+install -m 0755 %{stage_dir}/../browser-fork/packaging/gamecapture/cherries-steam %{buildroot}/usr/bin/cherries-steam
+cat > %{buildroot}/usr/share/applications/cherries-steam.desktop <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Cherries Steam (Game Capture)
+Comment=Launch native Steam with automatic game capture enabled
+Exec=cherries-steam
+Icon=steam
+Terminal=false
+Categories=Game;
+EOF
 cat > %{buildroot}/usr/bin/cherries-obs-wayland <<'EOF'
 #!/bin/sh
 umask 077
@@ -47,4 +63,7 @@ EOF
 %files
 /opt/cherries-obs
 /usr/bin/cherries-obs-wayland
+/usr/bin/cherries-gamecapture
+/usr/bin/cherries-steam
+/usr/share/applications/cherries-steam.desktop
 /usr/share/applications/cherries-obs-wayland.desktop

@@ -41,7 +41,8 @@ jobs:
             alsa-lib-devel libv4l-devel libva-devel libdrm-devel systemd-devel \
             pciutils-devel uthash-devel simde-devel nlohmann-json-devel \
             websocketpp-devel asio-devel libqrcodegencpp-devel mbedtls-devel \
-            libuuid-devel zlib-devel python3-devel speexdsp-devel x264-devel libvpl-devel fontconfig-devel freetype-devel nv-codec-headers
+            libuuid-devel zlib-devel python3-devel speexdsp-devel x264-devel libvpl-devel fontconfig-devel freetype-devel nv-codec-headers vulkan-loader-devel vulkan-headers zenity
+          dnf install -y glibc-devel.i686 libgcc.i686 vulkan-loader-devel.i686 mesa-libGL-devel.i686
       - name: Check out browser changes
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
@@ -56,14 +57,28 @@ jobs:
           fetch-depth: 0
           submodules: recursive
           persist-credentials: false
+      - name: Check out pinned Linux game capture
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: nowrep/obs-vkcapture
+          ref: 8a2c43295fae2ede8ffd382a1581281ceb6153c0
+          path: obs/plugins/cherries-gamecapture
+          persist-credentials: false
       - name: Integrate fork and download verified CEF
         env:
           CHERRIES_TWITCH_CLIENT_ID: ${{ vars.CHERRIES_TWITCH_CLIENT_ID }}
+          OBS_YOUTUBE_CLIENT_JSON: ${{ secrets.OBS_YOUTUBE_CLIENT_JSON }}
         shell: bash
         run: |
           rsync -a --delete --exclude=.git --exclude=.github browser-fork/ obs/plugins/obs-browser/
           git -C obs apply ../browser-fork/packaging/obs-twitch-integration.patch
           cp browser-fork/packaging/twitch/* obs/frontend/oauth/
+          git -C obs apply ../browser-fork/packaging/obs-youtube-integration.patch
+          cp browser-fork/packaging/youtube/* obs/frontend/oauth/
+          python3 browser-fork/packaging/configure-youtube-client.py obs/frontend/oauth/CherriesYouTubeBundled.hpp
+          git -C obs/plugins/cherries-gamecapture apply "$GITHUB_WORKSPACE/browser-fork/packaging/obs-vkcapture-integration.patch"
+          cp browser-fork/packaging/gamecapture/CherriesGameSelection.h obs/plugins/cherries-gamecapture/src/
+          echo 'add_subdirectory(cherries-gamecapture)' >> obs/plugins/CMakeLists.txt
           python3 browser-fork/packaging/configure-twitch-client.py obs/frontend/oauth/CherriesTwitchClient.hpp
           mkdir -p obs/.deps/cef
           curl -fL -o obs/.deps/cef.tar.xz https://cdn-fastly.obsproject.com/downloads/cef_binary_7871_linux_x86_64.tar.xz
@@ -87,6 +102,16 @@ jobs:
           g++ -std=c++20 -fPIC -Ibrowser-fork browser-fork/tests/twitch-session.cpp \
             $(pkg-config --cflags --libs Qt6Core) -o twitch-session-test
           ./twitch-session-test
+      - name: Check YouTube callbacks and automatic game selection
+        shell: bash
+        run: |
+          g++ -std=c++20 -fPIC -Ibrowser-fork browser-fork/tests/youtube-session.cpp \
+            $(pkg-config --cflags --libs Qt6Core) -o youtube-session-test
+          ./youtube-session-test
+          gcc -Ibrowser-fork browser-fork/tests/game-selection.c -o game-selection-test
+          ./game-selection-test
+          sh -n browser-fork/packaging/gamecapture/cherries-gamecapture
+          sh -n browser-fork/packaging/gamecapture/cherries-steam
       - name: Configure and build Fedora binaries
         shell: bash
         run: |
@@ -101,6 +126,20 @@ jobs:
           cmake --build obs/build-fedora --parallel 2
           DESTDIR="$GITHUB_WORKSPACE/stage" cmake --install obs/build-fedora
           cp obs/.deps/cef/LICENSE.txt stage/opt/cherries-obs/CEF-LICENSE.txt
+      - name: Build 32-bit game capture hooks
+        shell: bash
+        run: |
+          cmake -S obs/plugins/cherries-gamecapture -B gamecapture-32 -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_PLUGIN=OFF \
+            -DCMAKE_INSTALL_PREFIX=/opt/cherries-obs -DCMAKE_INSTALL_LIBDIR=lib \
+            -DCMAKE_C_FLAGS=-m32 -DCMAKE_SHARED_LINKER_FLAGS=-m32 \
+            -DVulkan_LIBRARY=/usr/lib/libvulkan.so -DOPENGL_gl_LIBRARY=/usr/lib/libGL.so
+          cmake --build gamecapture-32 --parallel 2
+          DESTDIR="$GITHUB_WORKSPACE/stage" cmake --install gamecapture-32
+          mkdir -p stage/opt/cherries-obs/share/licenses/obs-vkcapture
+          cp obs/plugins/cherries-gamecapture/LICENSE stage/opt/cherries-obs/share/licenses/obs-vkcapture/
+          ln -s ../lib64 stage/opt/cherries-obs/lib/x86_64-linux-gnu
+          ln -s . stage/opt/cherries-obs/lib/i386-linux-gnu
       - name: Build RPM
         shell: bash
         run: |
