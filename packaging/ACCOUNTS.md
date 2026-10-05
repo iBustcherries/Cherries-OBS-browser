@@ -78,8 +78,8 @@ using the same OBS audio track share one AAC encoder. Different tracks use separ
 AAC encoders with the primary output's audio encoder settings. This does not change
 recording tracks or the normal OBS streaming-track setting.
 Additional destinations add upload bandwidth and a small amount of connection
-and packet handling. Each connection reconnects independently. Stream keys are
-not saved in the account file. **Sending** reports transmitted bytes, not verified
+and packet handling. Each connection reconnects independently. API-provided stream keys are not saved in the account file. A manually entered
+YouTube portrait key is saved with the account, with the same owner-only file permissions. **Sending** reports transmitted bytes, not verified
 platform live status. Kick account integration is not included in this release.
 
 ### Optional Twitch Enhanced Broadcasting
@@ -126,12 +126,64 @@ session remains separate from its API authorization, as in standard OBS; YouTube
 may require browser sign-in for chat posting or the Live Control Panel. Broadcast
 creation and control use the saved OAuth account.
 
-### Release 9 validation status
+### Portrait canvas and YouTube dual-format streaming
 
-The account/UI changes and routing tests are checked locally. The release 9
-Fedora build is approved and queued for compilation, RPM packaging and
-installation checks. Authenticated account and live-stream testing remain
-pending on the target system.
+Open **Docks → Portrait Canvas** (also in Tools), then **Add Portrait Canvas**.
+Choose 1080×1920 or 720×1280 and a portrait H.264 encoder/bitrate. "Use landscape
+encoder type" copies the landscape encoder's settings into a separate encoder;
+it does not change the landscape encoder. Output settings are locked while
+video outputs are active.
+
+- **New scene** creates an independent portrait layout; **Copy landscape** copies
+  the current program scene's layout while reusing its capture sources. Groups
+  get independent transforms. Nested scene sources remain shared.
+- **Reuse source** adds an existing camera/game/browser source. Create new source
+  instances through the normal OBS Sources dock first.
+- Drag sources in the portrait preview to move them. Drag a source's bottom-right
+  corner to resize proportionally. **Transform** (or double-click a source name)
+  exposes position, scale, rotation, bounding-box size and cropping. **Fit** and
+  **Fill** preserve aspect ratio. Checkboxes control visibility; Move up/down
+  controls layering. These portrait controls currently do not integrate with
+  OBS's global undo stack.
+- Link each portrait scene to a landscape scene. **Follow linked landscape scene
+  changes** follows the live program scene (not the Studio Mode preview). It
+  cuts to the linked portrait scene; independent portrait transitions are not
+  included. An unlinked landscape scene leaves the current portrait scene active.
+- Portrait layouts, links, dimensions and encoder options are saved with the
+  scene collection. The portrait canvas does not mix a duplicate audio feed.
+
+In **Manage Broadcast → YouTube Output**, enable landscape and portrait for the
+chosen account. In YouTube Studio's Live Control Room, enable **Dual stream**,
+choose **Encoder** for the vertical view and select its second stream key. Paste
+that vertical key into OBS. It must differ from the landscape key. Configure
+pairing before going live; YouTube's public broadcast-binding API does not expose
+this Studio dual-input configuration. The new tab opens Studio for setup and
+shows the separate landscape/portrait connection states.
+
+**Start Streaming** sends the selected landscape destinations and portrait
+feeds together. **Stop Streaming** stops both. Portrait outputs reconnect
+independently; failure of a portrait output does not stop the landscape stream.
+Confirm both previews in Studio before manually starting the broadcast. OBS's
+"Sending" status confirms transmitted bytes, not YouTube's dual-stream pairing.
+
+Landscape destinations retain shared encoding. All selected YouTube portrait
+feeds share one additional H.264 encoder and the portrait canvas; audio reuses
+each account's selected live AAC track. Portrait requires an additional render
+pass, video encoder and upload connection per destination. Twitch Enhanced
+Broadcasting remains optional and may add its own renditions. YouTube dual format
+uses RTMPS for both orientations, including when a native HLS service was selected.
+
+The portrait key is masked in the UI and saved in the owner-readable account file.
+You can replace it if YouTube rotates the key. No additional Google OAuth login
+is needed for the output; Studio's website session is separate, as before.
+
+### Release 10 validation status
+
+The earlier platform changes passed the release 9 Fedora compile. Portrait
+geometry and shared-encoder/audio routing tests pass locally, as do syntax checks
+for the new dock and modified controls. Full release 10 Fedora packaging and
+installation checks are pending. Authenticated account, target Wayland desktop,
+and live dual-format testing remain pending on the target system.
 
 ## Application setup
 

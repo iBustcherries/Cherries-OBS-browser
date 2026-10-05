@@ -4,6 +4,7 @@
 #include <cstring>
 #include <array>
 #include <string>
+#include <cctype>
 
 // One encoder per distinct OBS mix; destinations selecting the same track reuse it.
 class CherriesAudioEncoders {
@@ -105,5 +106,23 @@ inline bool CherriesShareEncoders(obs_output_t *destination, obs_output_t *sourc
 	if (!CherriesSetAudioTracks(destination, audio, vod))
 		return false;
 	obs_output_set_video_encoder(destination, CherriesSharedVideoEncoder(source));
+	return true;
+}
+
+// Portrait geometry requires a separate video encoder; audio remains shared.
+inline bool CherriesSetPortraitEncoders(obs_output_t *output, obs_encoder_t *portrait, obs_encoder_t *audio)
+{
+	if (!portrait || strcmp(obs_encoder_get_codec(portrait), "h264") != 0 || !CherriesSetAudioTracks(output, audio))
+		return false;
+	obs_output_set_video_encoder(output, portrait);
+	return true;
+}
+inline bool CherriesValidPortraitKey(const std::string &portrait, const std::string &landscape)
+{
+	if (portrait.empty() || portrait == landscape || portrait.size() > 512)
+		return false;
+	for (unsigned char c : portrait)
+		if (std::isspace(c) || std::iscntrl(c))
+			return false;
 	return true;
 }

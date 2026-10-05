@@ -82,6 +82,11 @@ jobs:
           g++ -std=c++20 -fPIC -Ibrowser-fork browser-fork/tests/browser-frame-size.cpp \
             $(pkg-config --cflags --libs Qt6Gui) -o browser-frame-size-test
           ./browser-frame-size-test
+      - name: Check portrait preview geometry
+        shell: bash
+        run: |
+          g++ -std=c++20 -Ibrowser-fork browser-fork/tests/portrait-geometry.cpp -o portrait-geometry-test
+          ./portrait-geometry-test
       - name: Check OAuth callback parsing and token rotation
         shell: bash
         run: |

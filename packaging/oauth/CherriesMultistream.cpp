@@ -2,6 +2,11 @@
 #include "CherriesOAuth.hpp"
 #include "CherriesOAuthProtocol.hpp"
 #include "CherriesSharedOutput.hpp"
+#include "CherriesPortrait.hpp"
+#include <QDesktopServices>
+#include <QGroupBox>
+#include <QLineEdit>
+#include <QUrl>
 #include "TwitchAuth.hpp"
 #include "YoutubeAuth.hpp"
 #include <dialogs/OBSYoutubeActions.hpp>
@@ -52,6 +57,11 @@ class CherriesMultistream : public QWidget {
 		int audioTrack = 0; // 0 retains the normal OBS streaming track.
 		int vodTrack = 0;   // 0 uses normal live audio for the Twitch archive.
 		bool enhanced = false;
+		bool dualFormat = false;
+		QString portraitKey;
+		QString portraitStatus = "Offline";
+		OBSOutputAutoRelease portraitOutput;
+		OBSServiceAutoRelease portraitService;
 		QString streamId;
 		bool autoStart = true;
 		bool autoStop = true;
@@ -86,6 +96,7 @@ class CherriesMultistream : public QWidget {
 	int defaultAudioTrack = 1;
 	CherriesAudioEncoders audioEncoders;
 	OBSEncoderAutoRelease audioTemplate;
+	OBSEncoderAutoRelease portraitEncoder;
 	OBSServiceAutoRelease previousService;
 	std::shared_ptr<Auth> previousAuth;
 	bool previousAutoStart = false;
@@ -113,6 +124,8 @@ class CherriesMultistream : public QWidget {
 					   {"audio_track", account->audioTrack},
 					   {"vod_track", account->vodTrack},
 					   {"enhanced", account->enhanced},
+					   {"dual_format", account->dualFormat},
+					   {"portrait_key", account->portraitKey},
 					   {"broadcast", account->broadcast},
 					   {"stream_id", account->streamId},
 					   {"auto_start", account->autoStart},
@@ -177,6 +190,10 @@ class CherriesMultistream : public QWidget {
 			account->selected = record.value("selected").toBool();
 			account->broadcast = record.value("broadcast").toString();
 			account->streamId = record.value("stream_id").toString();
+			if (dynamic_cast<YoutubeAuth *>(auth.get())) {
+				account->dualFormat = record.value("dual_format").toBool();
+				account->portraitKey = record.value("portrait_key").toString().trimmed();
+			}
 			account->autoStart = record.value("auto_start").toBool(true);
 			account->autoStop = record.value("auto_stop").toBool(true);
 			auth->firstLoad = false;
@@ -233,7 +250,11 @@ class CherriesMultistream : public QWidget {
 			}
 			table->cellWidget(i, 0)->setEnabled(!busy);
 			table->setItem(i, 1, new QTableWidgetItem(account.label));
-			table->setItem(i, 2, new QTableWidgetItem(account.status));
+			table->setItem(i, 2,
+				       new QTableWidgetItem(account.dualFormat
+								    ? "Landscape: " + account.status +
+									      " | Portrait: " + account.portraitStatus
+								    : account.status));
 			if (!table->cellWidget(i, 3)) {
 				auto tracks = new QComboBox(table);
 				tracks->addItem("OBS default", 0);
@@ -402,6 +423,11 @@ class CherriesMultistream : public QWidget {
 		primary = nullptr;
 		audioEncoders.Clear();
 		audioTemplate = nullptr;
+		for (auto &account : accounts) {
+			account->portraitOutput = nullptr;
+			account->portraitService = nullptr;
+		}
+		portraitEncoder = nullptr;
 		running = false;
 		preparing = false;
 		Save();
@@ -430,6 +456,9 @@ class CherriesMultistream : public QWidget {
 		for (auto &account : accounts) {
 			if (account->output)
 				obs_output_force_stop(account->output);
+			if (account->portraitOutput)
+				obs_output_force_stop(account->portraitOutput);
+			account->portraitStatus = "Offline";
 			ReportIngestion(*account, false);
 			account->status = account->key.isEmpty() || dynamic_cast<TwitchAuth *>(account->auth.get())
 						  ? "Offline"
@@ -461,6 +490,83 @@ class CherriesMultistream : public QWidget {
 		const int track = VodTrack(account);
 		return track > 0 ? audioEncoders.Get(audioTemplate, track) : nullptr;
 	}
+	bool HasPortraitSelected() const
+	{
+		for (const auto &account : accounts)
+			if (account->selected && account->dualFormat &&
+			    dynamic_cast<YoutubeAuth *>(account->auth.get()))
+				return true;
+		return false;
+	}
+	bool PreparePortraitEncoder(obs_output_t *source)
+	{
+		if (!HasPortraitSelected())
+			return true;
+		auto landscape = CherriesSharedVideoEncoder(source);
+		QString id = CherriesPortraitEncoder();
+		if (id.isEmpty() && landscape)
+			id = QString::fromUtf8(obs_encoder_get_id(landscape));
+		const QByteArray encoderId = id.toUtf8();
+		const char *codec = encoderId.isEmpty() ? nullptr : obs_get_encoder_codec(encoderId.constData());
+		if (!codec || strcmp(codec, "h264") != 0 || !CherriesPortraitVideo()) {
+			message->setText("Choose an available H.264 portrait encoder in Docks → Portrait Canvas.");
+			return false;
+		}
+		OBSDataAutoRelease settings = obs_encoder_defaults(encoderId.constData());
+		if (!settings)
+			settings = obs_data_create();
+		OBSDataAutoRelease original = landscape && id == QString::fromUtf8(obs_encoder_get_id(landscape))
+						      ? obs_encoder_get_settings(landscape)
+						      : obs_encoder_defaults(encoderId.constData());
+		obs_data_apply(settings, original);
+		obs_data_set_string(settings, "rate_control", "CBR");
+		obs_data_set_int(settings, "bitrate", CherriesPortraitBitrate());
+		obs_data_set_int(settings, "keyint_sec", 2);
+		portraitEncoder =
+			obs_video_encoder_create(encoderId.constData(), "cherries_portrait_video", settings, nullptr);
+		if (!portraitEncoder) {
+			message->setText(
+				"Could not create the portrait video encoder. Choose another encoder in Portrait Canvas.");
+			return false;
+		}
+		obs_encoder_set_video(portraitEncoder, CherriesPortraitVideo());
+		obs_encoder_set_preferred_video_format(portraitEncoder, VIDEO_FORMAT_NV12);
+		return true;
+	}
+	void StartPortraitOutputs()
+	{
+		if (!HasPortraitSelected())
+			return;
+		bool failed = false;
+		for (auto &account : accounts) {
+			if (!account->selected || !account->dualFormat)
+				continue;
+			OBSDataAutoRelease settings = obs_data_create();
+			obs_data_set_string(settings, "service", "YouTube - RTMPS");
+			obs_data_set_string(settings, "server", "rtmps://a.rtmps.youtube.com/live2");
+			obs_data_set_string(settings, "key", account->portraitKey.toUtf8().constData());
+			const QByteArray name = (account->id + ":portrait").toUtf8();
+			account->portraitService =
+				obs_service_create("rtmp_common", name.constData(), settings, nullptr);
+			account->portraitOutput = obs_output_create("rtmp_output", name.constData(), nullptr, nullptr);
+			auto audio = audioEncoders.Get(audioTemplate, LiveTrack(*account));
+			if (!account->portraitService || !account->portraitOutput ||
+			    !CherriesSetPortraitEncoders(account->portraitOutput, portraitEncoder, audio)) {
+				account->portraitStatus = "Could not create output";
+				failed = true;
+				continue;
+			}
+			obs_output_set_service(account->portraitOutput, account->portraitService);
+			obs_output_set_reconnect_settings(account->portraitOutput, 20, 2);
+			const bool started = obs_output_start(account->portraitOutput);
+			account->portraitStatus = started ? "Connecting" : "Connection failed";
+			failed |= !started;
+		}
+		if (failed)
+			QMessageBox::warning(
+				main, "Portrait stream",
+				"A portrait output could not start. Landscape streaming is still running. Check the encoder, vertical stream key, and OBS log.");
+	}
 	bool HasExtraSelected() const
 	{
 		for (const auto &account : accounts)
@@ -475,7 +581,8 @@ class CherriesMultistream : public QWidget {
 		OBSDataAutoRelease native =
 			obs_service_get_settings(previousService ? previousService.Get() : main->GetService());
 		const std::string nativeName = obs_data_get_string(native, "service");
-		const std::string serviceName = twitch                         ? "Twitch"
+		const std::string serviceName = account.dualFormat             ? "YouTube - RTMPS"
+						: twitch                       ? "Twitch"
 						: IsYouTubeService(nativeName) ? nativeName
 									       : account.auth->service();
 		obs_data_set_string(settings, "service", serviceName.c_str());
@@ -501,7 +608,8 @@ class CherriesMultistream : public QWidget {
 		if (isPrimary) {
 			obs_data_set_bool(settings, "cherries_multistream", true);
 			obs_data_set_bool(settings, "cherries_enhanced", twitch && account.enhanced);
-			obs_data_set_bool(settings, "cherries_require_shared_h264", HasExtraSelected());
+			obs_data_set_bool(settings, "cherries_require_shared_h264",
+					  HasExtraSelected() || HasPortraitSelected());
 			obs_data_set_int(settings, "cherries_audio_track", LiveTrack(account));
 			obs_data_set_int(settings, "cherries_vod_track", VodTrack(account));
 		}
@@ -536,6 +644,9 @@ class CherriesMultistream : public QWidget {
 		for (auto &account : accounts) {
 			account->output = nullptr;
 			account->service = nullptr;
+			account->portraitOutput = nullptr;
+			account->portraitService = nullptr;
+			account->portraitStatus = "Offline";
 
 			if (!account->selected)
 				continue;
@@ -603,6 +714,21 @@ class CherriesMultistream : public QWidget {
 				}
 			}
 
+			if (account->dualFormat) {
+				QString error;
+				if (!CherriesValidPortraitKey(account->portraitKey.toStdString(),
+							      account->key.toStdString()))
+					error = "Enter a different, non-empty vertical stream key in Manage Broadcast → YouTube Output. Pair it using YouTube Studio's Dual stream → Encoder setting.";
+				else if (!CherriesPreparePortrait(error) && error.isEmpty())
+					error = "The portrait canvas is not ready.";
+				if (!error.isEmpty()) {
+					preparing = false;
+					Update();
+					QMessageBox::warning(main, "YouTube dual stream", error);
+					return;
+				}
+			}
+
 			if (!primary || account->enhanced ||
 			    (!primary->enhanced && !dynamic_cast<TwitchAuth *>(primary->auth.get()) &&
 			     dynamic_cast<TwitchAuth *>(account->auth.get())))
@@ -650,7 +776,8 @@ class CherriesMultistream : public QWidget {
 		OBSOutputAutoRelease source = obs_frontend_get_streaming_output();
 		obs_encoder_t *video = source ? obs_output_get_video_encoder(source) : nullptr;
 		obs_encoder_t *audio = source ? obs_output_get_audio_encoder(source, 0) : nullptr;
-		if (HasExtraSelected() && (!video || !audio || !CherriesCanShareOutput(source))) {
+		if ((HasExtraSelected() || HasPortraitSelected()) &&
+		    (!video || !audio || !CherriesCanShareOutput(source))) {
 			message->setText(
 				"Use H.264 video and AAC audio in Settings → Output for shared multistream encoding.");
 			main->ForceStopStreaming();
@@ -681,8 +808,11 @@ class CherriesMultistream : public QWidget {
 			obs_output_set_reconnect_settings(account->output, 20, 2);
 			account->status = obs_output_start(account->output) ? "Connecting" : "Connection failed";
 		}
+		StartPortraitOutputs();
 		message->setText(
-			primary->enhanced && main->outputHandler->multitrackVideoActive
+			HasPortraitSelected()
+				? "Landscape video is shared across destinations. Portrait uses one additional video encoder; audio is shared by track."
+			: primary->enhanced && main->outputHandler->multitrackVideoActive
 				? "Twitch Enhanced Broadcasting is active. Other destinations share a compatible H.264 rendition."
 				: "All destinations share OBS's video encoder; audio encoders are shared by track. Sending does not confirm platform live status.");
 		Update();
@@ -739,6 +869,8 @@ public:
 				return false;
 			}
 		}
+		if (!PreparePortraitEncoder(output))
+			return false;
 		if (enhancedActive)
 			return true; // Preserve all audio renditions assigned by Twitch's configuration.
 		auto encoder = audioEncoders.Get(audioTemplate, LiveTrack(*primary));
@@ -838,6 +970,7 @@ public:
 	void Manage(int tab = -1);
 	explicit CherriesMultistream(OBSBasic *obsMain) : QWidget(obsMain), main(obsMain)
 	{
+		CherriesInstallPortrait(main, main->collectionModuleData);
 		auto layout = new QVBoxLayout(this);
 		connections = new QLabel(this);
 		connections->setTextFormat(Qt::RichText);
@@ -963,6 +1096,14 @@ public:
 						  : obs_output_get_total_bytes(output) > 0 ? "Sending"
 											   : "Connecting";
 				ReportIngestion(*account, account->status == "Sending");
+				if (account->dualFormat && account->portraitOutput) {
+					auto portrait = account->portraitOutput.Get();
+					account->portraitStatus = obs_output_reconnecting(portrait) ? "Reconnecting"
+								  : !obs_output_active(portrait)    ? "Disconnected"
+								  : obs_output_get_total_bytes(portrait) > 0
+									  ? "Sending"
+									  : "Connecting";
+				}
 			}
 			Update();
 		});
@@ -1101,6 +1242,56 @@ void CherriesMultistream::Manage(int tab)
 		editor.SetCombinedPage(twitchPage);
 		editor.findChild<QTabWidget *>("tabWidget")->setCurrentIndex(tab > 0 ? tab : 0);
 		layout->addWidget(&editor, 1);
+		auto formatPage = new QWidget(&window);
+		auto formatLayout = new QVBoxLayout(formatPage);
+		auto dual = new QCheckBox("Send landscape and portrait to this YouTube account", formatPage);
+		dual->setChecked(youtube->dualFormat);
+		formatLayout->addWidget(dual);
+		auto instructions = new QLabel(
+			"In YouTube Studio, enable Dual stream and choose Encoder for the vertical view. Select a second stream key and paste it below. Set this up before going live. Both formats use this account's selected live audio track.",
+			formatPage);
+		instructions->setWordWrap(true);
+		formatLayout->addWidget(instructions);
+		auto form = new QFormLayout;
+		auto key = new QLineEdit(youtube->portraitKey, formatPage);
+		key->setEchoMode(QLineEdit::Password);
+		key->setPlaceholderText("Vertical stream key from YouTube Studio");
+		form->addRow("Portrait stream key", key);
+		formatLayout->addLayout(form);
+		auto reveal = new QCheckBox("Show stream key", formatPage);
+		formatLayout->addWidget(reveal);
+		auto studio = new QPushButton("Open YouTube Studio dual-stream setup", formatPage);
+		auto canvasButton = new QPushButton("Open Portrait Canvas", formatPage);
+		formatLayout->addWidget(studio);
+		formatLayout->addWidget(canvasButton);
+		auto portraitState = new QLabel(formatPage);
+		portraitState->setWordWrap(true);
+		formatLayout->addWidget(portraitState);
+		auto resourceNote = new QLabel(
+			"Portrait needs an additional video encoder and upload bandwidth. The vertical key is saved with your local account settings.",
+			formatPage);
+		resourceNote->setWordWrap(true);
+		formatLayout->addWidget(resourceNote);
+		formatLayout->addStretch();
+		editor.findChild<QTabWidget *>("tabWidget")->addTab(formatPage, "YouTube Output");
+		connect(dual, &QCheckBox::toggled, &window, [&, youtube](bool enabled) {
+			youtube->dualFormat = enabled;
+			key->setEnabled(enabled);
+			Save();
+			Update();
+		});
+		connect(key, &QLineEdit::textChanged, &window, [&, youtube](const QString &value) {
+			youtube->portraitKey = value.trimmed();
+			Save();
+		});
+		connect(reveal, &QCheckBox::toggled, &window,
+			[key](bool show) { key->setEchoMode(show ? QLineEdit::Normal : QLineEdit::Password); });
+		connect(canvasButton, &QPushButton::clicked, &window, [&window]() {
+			window.accept();
+			QTimer::singleShot(0, []() { CherriesShowPortrait(); });
+		});
+		connect(studio, &QPushButton::clicked, &window,
+			[]() { QDesktopServices::openUrl(QUrl("https://studio.youtube.com")); });
 		connect(&editor, &OBSYoutubeActions::rejected, &window, &QDialog::reject);
 		auto actions = new QWidget(&window);
 		auto actionLayout = new QHBoxLayout(actions);
@@ -1119,7 +1310,12 @@ void CherriesMultistream::Manage(int tab)
 		auto api = std::dynamic_pointer_cast<YoutubeApiWrappers>(youtube->auth);
 		bool requestRunning = false;
 		auto updateActions = [&]() {
-			editor.SetBroadcastLocked(running && youtube->selected);
+			const bool busy = preparing || (running && youtube->selected);
+			editor.SetBroadcastLocked(busy);
+			dual->setEnabled(!busy);
+			key->setEnabled(!busy && dual->isChecked());
+			portraitState->setText("Landscape: " + youtube->status +
+					       "\nPortrait: " + youtube->portraitStatus);
 			actions->setVisible(editor.findChild<QTabWidget *>("tabWidget")->currentIndex() > 0 &&
 					    !youtube->broadcast.isEmpty());
 			bool available = !requestRunning && !editor.IsLoading();
@@ -1186,6 +1382,8 @@ void CherriesMultistream::Manage(int tab)
 					main->StopStreaming();
 				else if (youtube->output)
 					obs_output_force_stop(youtube->output);
+				if (youtube->portraitOutput)
+					obs_output_force_stop(youtube->portraitOutput);
 				ReportIngestion(*youtube, false);
 				youtube->key.clear();
 				youtube->broadcast.clear();

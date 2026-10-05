@@ -101,6 +101,23 @@ int main()
 {
 	obs_encoder video{"h264"}, audio{"aac"}, av1{"av1"};
 	obs_output source{&video, &audio}, twitch, youtube, third;
+	obs_encoder portraitVideo{"h264"};
+	obs_output portraitOne, portraitTwo;
+	assert(CherriesSetPortraitEncoders(&portraitOne, &portraitVideo, &audio));
+	assert(CherriesSetPortraitEncoders(&portraitTwo, &portraitVideo, &audio));
+	assert(portraitOne.video != source.video && portraitOne.video == portraitTwo.video);
+	assert(portraitOne.audio == source.audio && portraitTwo.audio == source.audio);
+	assert(portraitOne.extra[1] == nullptr);
+	assert(!CherriesSetPortraitEncoders(&portraitOne, &av1, &audio));
+	assert(!CherriesSetPortraitEncoders(&portraitOne, nullptr, &audio));
+	assert(!CherriesSetPortraitEncoders(&portraitOne, &portraitVideo, nullptr));
+	assert(!CherriesSetPortraitEncoders(nullptr, &portraitVideo, &audio));
+	assert(CherriesValidPortraitKey("vertical-key", "landscape-key"));
+	assert(!CherriesValidPortraitKey("same-key", "same-key"));
+	assert(!CherriesValidPortraitKey("", "landscape-key"));
+	assert(!CherriesValidPortraitKey("invalid key", "landscape-key"));
+	assert(!CherriesValidPortraitKey("invalid\nkey", "landscape-key"));
+	assert(!CherriesValidPortraitKey(std::string(513, 'a'), "landscape-key"));
 	assert(CherriesShareEncoders(&twitch, &source));
 	assert(CherriesShareEncoders(&youtube, &source));
 	assert(CherriesShareEncoders(&third, &source));
