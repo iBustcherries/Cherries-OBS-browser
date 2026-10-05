@@ -12,7 +12,7 @@ index 663c48e..5639dbf 100644
  else()
    target_disable_feature(obs-studio "Twitch API connection")
 diff --git a/frontend/oauth/TwitchAuth.cpp b/frontend/oauth/TwitchAuth.cpp
-index beee869..b48fb71 100644
+index beee869..bb3ce1d 100644
 --- a/frontend/oauth/TwitchAuth.cpp
 +++ b/frontend/oauth/TwitchAuth.cpp
 @@ -1,4 +1,5 @@
@@ -57,7 +57,7 @@ index beee869..b48fb71 100644
  
  	std::string url = "https://api.twitch.tv/helix/";
  	url += std::string(path);
-@@ -117,10 +123,9 @@ bool TwitchAuth::MakeApiRequest(const char *path, Json &json_out)
+@@ -117,15 +123,19 @@ bool TwitchAuth::MakeApiRequest(const char *path, Json &json_out)
  
  bool TwitchAuth::GetChannelInfo()
  try {
@@ -70,7 +70,17 @@ index beee869..b48fb71 100644
  		return false;
  	}
  	if (token.empty()) {
-@@ -300,6 +305,10 @@ void TwitchAuth::LoadUI()
+ 		return false;
+ 	}
++	// Persist rotated refresh tokens immediately for already connected profiles.
++	if (currentScopeVer > 0) {
++		OAuth::SaveInternal();
++		config_save_safe(OBSBasic::Get()->Config(), "tmp", nullptr);
++	}
+ 	if (!key_.empty()) {
+ 		return true;
+ 	}
+@@ -300,6 +310,10 @@ void TwitchAuth::LoadUI()
  
  void TwitchAuth::LoadSecondaryUIPanes()
  {
@@ -81,13 +91,7 @@ index beee869..b48fb71 100644
  	OBSBasic *main = OBSBasic::Get();
  
  	QCefWidget *browser;
-@@ -436,55 +445,46 @@ void TwitchAuth::TryLoadSecondaryUIPanes()
- 	QPointer<TwitchAuth> this_ = this;
- 
- 	auto cb = [this_](bool found) {
--		if (!this_) {
-+		if (!this_ || this_->secondaryUILoaded) {
- 			return;
+@@ -441,50 +455,41 @@ void TwitchAuth::TryLoadSecondaryUIPanes()
  		}
  
  		if (!found) {
@@ -156,7 +160,7 @@ index beee869..b48fb71 100644
  }
  
  static std::shared_ptr<Auth> CreateTwitchAuth()
-@@ -495,17 +495,13 @@ static std::shared_ptr<Auth> CreateTwitchAuth()
+@@ -495,17 +500,13 @@ static std::shared_ptr<Auth> CreateTwitchAuth()
  static void DeleteCookies()
  {
  	if (panel_cookies) {
@@ -190,3 +194,16 @@ index bbd8ca4..33fada7 100644
  
  	std::string name;
  	std::string uuid;
+diff --git a/frontend/widgets/OBSBasic_Browser.cpp b/frontend/widgets/OBSBasic_Browser.cpp
+index 61dee0c..5512551 100644
+--- a/frontend/widgets/OBSBasic_Browser.cpp
++++ b/frontend/widgets/OBSBasic_Browser.cpp
+@@ -205,7 +205,7 @@ static void InitPanelCookieManager()
+ 	sub_path += "obs_profile_cookies/";
+ 	sub_path += cookie_id;
+ 
+-	panel_cookies = cef->create_cookie_manager(sub_path);
++	panel_cookies = cef->create_cookie_manager(sub_path, true);
+ }
+ #endif
+ 
