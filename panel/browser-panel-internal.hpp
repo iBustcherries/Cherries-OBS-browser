@@ -20,6 +20,9 @@ extern std::mutex popup_whitelist_mutex;
 extern std::vector<PopupWhitelistInfo> popup_whitelist;
 extern std::vector<PopupWhitelistInfo> forced_popups;
 
+// Read the native clipboard on the Qt GUI thread, then insert on the CEF thread.
+void PasteBrowserClipboard(CefRefPtr<CefBrowserHost> host);
+
 /* ------------------------------------------------------------------------- */
 
 class QCefWidgetInternal : public QCefWidget {

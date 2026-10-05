@@ -57,9 +57,14 @@ jobs:
           submodules: recursive
           persist-credentials: false
       - name: Integrate fork and download verified CEF
+        env:
+          CHERRIES_TWITCH_CLIENT_ID: ${{ vars.CHERRIES_TWITCH_CLIENT_ID }}
         shell: bash
         run: |
           rsync -a --delete --exclude=.git --exclude=.github browser-fork/ obs/plugins/obs-browser/
+          git -C obs apply ../browser-fork/packaging/obs-twitch-integration.patch
+          cp browser-fork/packaging/twitch/* obs/frontend/oauth/
+          python3 browser-fork/packaging/configure-twitch-client.py obs/frontend/oauth/CherriesTwitchClient.hpp
           mkdir -p obs/.deps/cef
           curl -fL -o obs/.deps/cef.tar.xz https://cdn-fastly.obsproject.com/downloads/cef_binary_7871_linux_x86_64.tar.xz
           echo '8ffc64d06ea74da613eeda7f2aa5d4e98661af6fa3ed8c68724c9a6e4e89ea8e  obs/.deps/cef.tar.xz' | sha256sum -c -
@@ -76,6 +81,12 @@ jobs:
           g++ -std=c++20 -fPIC -Ibrowser-fork browser-fork/tests/browser-frame-size.cpp \
             $(pkg-config --cflags --libs Qt6Gui) -o browser-frame-size-test
           ./browser-frame-size-test
+      - name: Check Twitch session protocol
+        shell: bash
+        run: |
+          g++ -std=c++20 -fPIC -Ibrowser-fork browser-fork/tests/twitch-session.cpp \
+            $(pkg-config --cflags --libs Qt6Core) -o twitch-session-test
+          ./twitch-session-test
       - name: Configure and build Fedora binaries
         shell: bash
         run: |
