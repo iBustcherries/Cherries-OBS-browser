@@ -1,4 +1,5 @@
 #include "browser-panel-client.hpp"
+#include "browser-panel-popup.hpp"
 #include <util/dstr.h>
 
 #include <QUrl>
@@ -155,10 +156,15 @@ bool QCefBrowserClient::OnBeforeBrowse(CefRefPtr<CefBrowser> browser, CefRefPtr<
 	return false;
 }
 
-bool QCefBrowserClient::OnOpenURLFromTab(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, const CefString &target_url,
-					 CefRequestHandler::WindowOpenDisposition, bool)
+bool QCefBrowserClient::OnOpenURLFromTab(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame>,
+					 const CefString &target_url, CefRequestHandler::WindowOpenDisposition, bool)
 {
 	std::string str_url = target_url;
+	if (widget && widget->windowless && ReuseTwitchPopup(allowAllPopups, QUrl(QString::fromStdString(str_url)))) {
+		if (auto frame = browser->GetMainFrame())
+			frame->LoadURL(target_url);
+		return true;
+	}
 
 	/* Open tab popup URLs in user's actual browser */
 	QUrl url = QUrl(str_url.c_str(), QUrl::TolerantMode);
@@ -202,7 +208,7 @@ void QCefBrowserClient::OnLoadError(CefRefPtr<CefBrowser> browser, CefRefPtr<Cef
 }
 
 /* CefLifeSpanHandler */
-bool QCefBrowserClient::OnBeforePopup(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>,
+bool QCefBrowserClient::OnBeforePopup(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame>,
 #if CHROME_VERSION_BUILD >= 6834
 				      int,
 #endif
@@ -211,11 +217,15 @@ bool QCefBrowserClient::OnBeforePopup(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>
 				      CefWindowInfo &windowInfo, CefRefPtr<CefClient> &, CefBrowserSettings &,
 				      CefRefPtr<CefDictionaryValue> &, bool *)
 {
-	// Native CEF popup windows and DevTools still use the X11 panel path.
-	// Route OSR popup requests to the user's browser until Qt popup hosting
-	// has been implemented (window.open/OAuth compatibility is not complete).
+	// OSR Twitch authorization stays in the same account session. Other
+	// popups use the system browser until Qt popup hosting is implemented.
 	if (widget && widget->windowless) {
 		QUrl popupUrl(QString::fromStdString(target_url.ToString()));
+		if (ReuseTwitchPopup(allowAllPopups, popupUrl)) {
+			if (auto frame = browser->GetMainFrame())
+				frame->LoadURL(target_url);
+			return true;
+		}
 		QMetaObject::invokeMethod(
 			QCoreApplication::instance(), [popupUrl]() { QDesktopServices::openUrl(popupUrl); },
 			Qt::QueuedConnection);
@@ -315,8 +325,9 @@ void QCefBrowserClient::OnBeforeContextMenu(CefRefPtr<CefBrowser> browser, CefRe
 }
 
 #if defined(_WIN32) || defined(__linux__)
-bool QCefBrowserClient::RunContextMenu(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame>, CefRefPtr<CefContextMenuParams> params,
-				       CefRefPtr<CefMenuModel> model, CefRefPtr<CefRunContextMenuCallback> callback)
+bool QCefBrowserClient::RunContextMenu(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame>,
+				       CefRefPtr<CefContextMenuParams> params, CefRefPtr<CefMenuModel> model,
+				       CefRefPtr<CefRunContextMenuCallback> callback)
 {
 #ifdef __linux__
 	if (!widget || !widget->windowless)
@@ -346,8 +357,8 @@ bool QCefBrowserClient::RunContextMenu(CefRefPtr<CefBrowser> browser, CefRefPtr<
 			case MENUITEMTYPE_COMMAND: {
 				QAction *item = new QAction(name.c_str(), &contextMenu);
 				item->setEnabled(command_id == MENU_ID_PASTE && nativePaste
-						 ? !QApplication::clipboard()->text().isEmpty()
-						 : enabled);
+							 ? !QApplication::clipboard()->text().isEmpty()
+							 : enabled);
 				if (type_id == MENUITEMTYPE_CHECK) {
 					item->setCheckable(true);
 					item->setChecked(check);

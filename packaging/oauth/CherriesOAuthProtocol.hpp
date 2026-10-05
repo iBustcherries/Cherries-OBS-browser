@@ -1,6 +1,8 @@
 #pragma once
 
 #include <QJsonObject>
+#include <QCryptographicHash>
+#include <QRegularExpression>
 #include <QUrl>
 #include <QUrlQuery>
 #include <QString>
@@ -8,6 +10,22 @@
 #include <string>
 
 namespace CherriesOAuthProtocol {
+inline std::string TwitchStreamKey(const std::string &key, bool bandwidthTest)
+{
+	return bandwidthTest ? key + "?bandwidthtest=true" : key;
+}
+
+inline QString TwitchBrowserProfile(const QString &saved, const QString &login)
+{
+	// Profiles are account-local directory names, never arbitrary filesystem paths.
+	if (QRegularExpression("^cherries-twitch-([a-f0-9]{32}|[a-f0-9]{64})$").match(saved).hasMatch())
+		return saved;
+	// Reuse the stream-info cookies created by releases 6/7 for existing accounts.
+	return "cherries-twitch-" +
+	       QString::fromLatin1(
+		       QCryptographicHash::hash(("twitch:" + login).toUtf8(), QCryptographicHash::Sha256).toHex());
+}
+
 inline QByteArray Form(const QList<QPair<QString, QString>> &fields)
 {
 	QByteArray result;

@@ -25,19 +25,18 @@ index be87b50..3c92b93 100644
      obs-studio
      PRIVATE
 diff --git a/frontend/cmake/ui-oauth.cmake b/frontend/cmake/ui-oauth.cmake
-index b48f845..4e5672d 100644
+index b48f845..4bb8f67 100644
 --- a/frontend/cmake/ui-oauth.cmake
 +++ b/frontend/cmake/ui-oauth.cmake
-@@ -1,4 +1,7 @@
+@@ -1,4 +1,6 @@
  target_sources(
    obs-studio
    PRIVATE oauth/Auth.cpp oauth/Auth.hpp oauth/AuthListener.cpp oauth/AuthListener.hpp oauth/OAuth.cpp oauth/OAuth.hpp
 +    oauth/CherriesOAuth.cpp oauth/CherriesOAuth.hpp oauth/CherriesOAuthProtocol.hpp
 +    oauth/CherriesMultistream.cpp oauth/CherriesMultistream.hpp oauth/CherriesSharedOutput.hpp
-+    oauth/CherriesTwitchBroadcast.cpp oauth/CherriesTwitchBroadcast.hpp
  )
 diff --git a/frontend/dialogs/OBSYoutubeActions.cpp b/frontend/dialogs/OBSYoutubeActions.cpp
-index 0b4006f..9199843 100644
+index 0b4006f..067676c 100644
 --- a/frontend/dialogs/OBSYoutubeActions.cpp
 +++ b/frontend/dialogs/OBSYoutubeActions.cpp
 @@ -10,6 +10,7 @@
@@ -112,7 +111,7 @@ index 0b4006f..9199843 100644
  			ClickableLabel *label = new ClickableLabel();
  			label->setTextFormat(Qt::RichText);
  
-@@ -247,6 +268,61 @@ OBSYoutubeActions::OBSYoutubeActions(QWidget *parent, Auth *auth, bool broadcast
+@@ -247,6 +268,75 @@ OBSYoutubeActions::OBSYoutubeActions(QWidget *parent, Auth *auth, bool broadcast
  	valid = true;
  }
  
@@ -120,6 +119,20 @@ index 0b4006f..9199843 100644
 +{
 +	return ui->tabWidget->currentIndex() == (combined ? 1 : 0);
 +}
++bool OBSYoutubeActions::IsLoading() const
++{
++	return workerThread && workerThread->isRunning();
++}
++
++void OBSYoutubeActions::SetBroadcastLocked(bool locked)
++{
++	if (broadcastLocked == locked) {
++		return;
++	}
++	broadcastLocked = locked;
++	UpdateOkButtonStatus();
++}
++
 +void OBSYoutubeActions::SetCombinedPage(QWidget *page)
 +{
 +	combined = true;
@@ -174,7 +187,7 @@ index 0b4006f..9199843 100644
  void OBSYoutubeActions::showEvent(QShowEvent *event)
  {
  	QDialog::showEvent(event);
-@@ -305,16 +381,14 @@ void WorkerThread::run()
+@@ -305,16 +395,14 @@ void WorkerThread::run()
  					      item["contentDetails"]["enableAutoStart"].bool_value();
  				bool astop = item["contentDetails"]["enableAutoStop"].bool_value();
  
@@ -198,7 +211,7 @@ index 0b4006f..9199843 100644
  			}
  
  			auto nextPageToken = broadcasts["nextPageToken"].string_value();
-@@ -340,7 +414,7 @@ void OBSYoutubeActions::UpdateOkButtonStatus()
+@@ -340,7 +428,7 @@ void OBSYoutubeActions::UpdateOkButtonStatus()
  {
  	bool enable = false;
  
@@ -207,7 +220,7 @@ index 0b4006f..9199843 100644
  		enable = !ui->title->text().isEmpty() && !ui->privacyBox->currentText().isEmpty() &&
  			 (ui->yesMakeForKids->isChecked() || ui->notMakeForKids->isChecked());
  		ui->okButton->setEnabled(enable);
-@@ -363,6 +437,14 @@ void OBSYoutubeActions::UpdateOkButtonStatus()
+@@ -363,6 +451,15 @@ void OBSYoutubeActions::UpdateOkButtonStatus()
  
  		ui->pushButton->setVisible(true);
  	}
@@ -215,14 +228,47 @@ index 0b4006f..9199843 100644
 +		bool twitch = ui->tabWidget->currentIndex() == 0;
 +		ui->saveButton->setVisible(false);
 +		ui->okButton->setVisible(!twitch);
-+		ui->okButton->setEnabled(!twitch && enable && !workerThread->isRunning());
-+		ui->pushButton->setVisible(false);
++		ui->okButton->setEnabled(!twitch && enable && !broadcastLocked && !IsLoading());
++		ui->pushButton->setVisible(!twitch);
++		ui->pushButton->setText("Open YouTube Studio");
 +		ui->okButton->setText(IsCreateTab() ? "Create broadcast" : "Use selected broadcast");
 +	}
  }
  bool OBSYoutubeActions::CreateEventAction(YoutubeApiWrappers *api, BroadcastDescription &broadcast,
  					  StreamDescription &stream, bool stream_later, bool ready_broadcast)
-@@ -503,7 +585,7 @@ void OBSYoutubeActions::InitBroadcast()
+@@ -422,8 +519,8 @@ bool OBSYoutubeActions::CreateEventAction(YoutubeApiWrappers *api, BroadcastDesc
+ 	}
+ 
+ #ifdef YOUTUBE_ENABLED
+-	if (OBSBasic::Get()->GetYouTubeAppDock()) {
+-		OBSBasic::Get()->GetYouTubeAppDock()->BroadcastCreated(broadcast.id.toStdString().c_str());
++	if (apiYouTube->GetControlDock()) {
++		apiYouTube->GetControlDock()->BroadcastCreated(broadcast.id.toStdString().c_str());
+ 	}
+ #endif
+ 
+@@ -471,8 +568,8 @@ bool OBSYoutubeActions::ChooseAnEventAction(YoutubeApiWrappers *api, StreamDescr
+ 	}
+ 
+ #ifdef YOUTUBE_ENABLED
+-	if (OBSBasic::Get()->GetYouTubeAppDock()) {
+-		OBSBasic::Get()->GetYouTubeAppDock()->BroadcastSelected(selectedBroadcast.toStdString().c_str());
++	if (apiYouTube->GetControlDock()) {
++		apiYouTube->GetControlDock()->BroadcastSelected(selectedBroadcast.toStdString().c_str());
+ 	}
+ #endif
+ 
+@@ -493,6 +590,9 @@ void OBSYoutubeActions::ShowErrorDialog(QWidget *parent, QString text)
+ 
+ void OBSYoutubeActions::InitBroadcast()
+ {
++	if (broadcastLocked) {
++		return;
++	}
+ 	BroadcastDescription broadcast;
+ 	StreamDescription stream;
+ 	QMessageBox msgBox(this);
+@@ -503,7 +603,7 @@ void OBSYoutubeActions::InitBroadcast()
  
  	bool success = false;
  	auto action = [&]() {
@@ -231,7 +277,7 @@ index 0b4006f..9199843 100644
  			success = this->CreateEventAction(apiYouTube, broadcast, stream,
  							  ui->checkScheduledLater->isChecked());
  		} else {
-@@ -520,7 +602,7 @@ void OBSYoutubeActions::InitBroadcast()
+@@ -520,7 +620,7 @@ void OBSYoutubeActions::InitBroadcast()
  	thread->wait();
  
  	if (success) {
@@ -240,7 +286,7 @@ index 0b4006f..9199843 100644
  			// Stream later usecase.
  			if (ui->checkScheduledLater->isChecked()) {
  				QMessageBox msg(this);
-@@ -532,7 +614,7 @@ void OBSYoutubeActions::InitBroadcast()
+@@ -532,7 +632,7 @@ void OBSYoutubeActions::InitBroadcast()
  				Cancel();
  			} else {
  				// Stream now usecase.
@@ -249,7 +295,17 @@ index 0b4006f..9199843 100644
  				emit ok(broadcast.id.toStdString(), stream.id.toStdString(), stream.name.toStdString(),
  					true, true, true);
  				Accept();
-@@ -569,7 +651,7 @@ void OBSYoutubeActions::ReadyBroadcast()
+@@ -559,6 +659,9 @@ void OBSYoutubeActions::InitBroadcast()
+ 
+ void OBSYoutubeActions::ReadyBroadcast()
+ {
++	if (broadcastLocked) {
++		return;
++	}
+ 	BroadcastDescription broadcast;
+ 	StreamDescription stream;
+ 	QMessageBox msgBox(this);
+@@ -569,7 +672,7 @@ void OBSYoutubeActions::ReadyBroadcast()
  
  	bool success = false;
  	auto action = [&]() {
@@ -258,7 +314,7 @@ index 0b4006f..9199843 100644
  			success = this->CreateEventAction(apiYouTube, broadcast, stream,
  							  ui->checkScheduledLater->isChecked(), true);
  		} else {
-@@ -736,6 +818,11 @@ void OBSYoutubeActions::Cancel()
+@@ -736,6 +839,11 @@ void OBSYoutubeActions::Cancel()
  }
  void OBSYoutubeActions::Accept()
  {
@@ -271,7 +327,7 @@ index 0b4006f..9199843 100644
  	accept();
  }
 diff --git a/frontend/dialogs/OBSYoutubeActions.hpp b/frontend/dialogs/OBSYoutubeActions.hpp
-index 6d4ca31..271cd4f 100644
+index 6d4ca31..61bf725 100644
 --- a/frontend/dialogs/OBSYoutubeActions.hpp
 +++ b/frontend/dialogs/OBSYoutubeActions.hpp
 @@ -5,6 +5,9 @@
@@ -305,25 +361,336 @@ index 6d4ca31..271cd4f 100644
  	void failed();
  };
  
-@@ -51,6 +55,7 @@ public:
+@@ -51,6 +55,9 @@ public:
  	virtual ~OBSYoutubeActions() override;
  
  	bool Valid() { return valid; };
 +	void SetCombinedPage(QWidget *page);
++	bool IsLoading() const;
++	void SetBroadcastLocked(bool locked);
  
  private:
  	void InitBroadcast();
-@@ -71,6 +76,10 @@ private:
+@@ -71,6 +78,11 @@ private:
  	YoutubeApiWrappers *apiYouTube;
  	WorkerThread *workerThread = nullptr;
  	bool broadcastReady = false;
 +	bool combined = false;
++	bool broadcastLocked = false;
 +	QTableWidget *broadcastsTable = nullptr;
 +	QLabel *broadcastDetails = nullptr;
 +	bool IsCreateTab() const;
  	QString thumbnailFile;
  	QIcon thumbPlaceholder;
  };
+diff --git a/frontend/docks/YouTubeAppDock.cpp b/frontend/docks/YouTubeAppDock.cpp
+index 78a528f..b63ccdf 100644
+--- a/frontend/docks/YouTubeAppDock.cpp
++++ b/frontend/docks/YouTubeAppDock.cpp
+@@ -32,7 +32,14 @@ static constexpr const char *BROADCAST_SELECTED = "BROADCAST_SELECTED";
+ static constexpr const char *INGESTION_STARTED = "INGESTION_STARTED";
+ static constexpr const char *INGESTION_STOPPED = "INGESTION_STOPPED";
+ 
+-YouTubeAppDock::YouTubeAppDock(const QString &title) : BrowserDock(title), dockBrowser(nullptr)
++YouTubeAppDock::YouTubeAppDock(const QString &title, YoutubeApiWrappers *account, const QString &dockId,
++			       QCefCookieManager *cookies, const QString &channel)
++	: BrowserDock(title),
++	  accountApi(account),
++	  accountDockId(dockId),
++	  accountCookies(cookies),
++	  channelId(channel),
++	  dockBrowser(nullptr)
+ {
+ 	cef->init_browser();
+ 	OBSBasic::InitBrowserPanelSafeBlock();
+@@ -51,6 +58,12 @@ bool YouTubeAppDock::IsYTServiceSelected()
+ 	return IsYouTubeService(service);
+ }
+ 
++void YouTubeAppDock::BindAccount(YoutubeApiWrappers *account, const QString &channel)
++{
++	accountApi = account;
++	channelId = channel;
++}
++
+ void YouTubeAppDock::AccountConnected()
+ {
+ 	channelId.clear(); // renew channel id
+@@ -64,14 +77,15 @@ void YouTubeAppDock::AccountDisconnected()
+ 
+ void YouTubeAppDock::SettingsUpdated(bool cleanup)
+ {
+-	bool ytservice = IsYTServiceSelected();
++	bool ytservice = accountApi || IsYTServiceSelected();
+ 	SetVisibleYTAppDockInMenu(ytservice);
+ 
+ 	// definitely cleanup if YT switched off
+ 	if (!ytservice || cleanup) {
+-		if (panel_cookies) {
+-			panel_cookies->DeleteCookies("youtube.com", "");
+-			panel_cookies->DeleteCookies("google.com", "");
++		auto cookies = accountCookies ? accountCookies : panel_cookies;
++		if (cookies) {
++			cookies->DeleteCookies("youtube.com", "");
++			cookies->DeleteCookies("google.com", "");
+ 		}
+ 	}
+ 
+@@ -84,8 +98,11 @@ std::string YouTubeAppDock::InitYTUserUrl()
+ {
+ 	std::string user_url(YOUTUBE_WEBAPP_PLACEHOLDER_URL);
+ 
+-	if (IsUserSignedIntoYT()) {
+-		YoutubeApiWrappers *apiYouTube = GetYTApi();
++	if (accountApi && !channelId.isEmpty()) {
++		return QString(YOUTUBE_WEBAPP_ADDRESS_URL).arg(channelId).toStdString();
++	}
++	if (accountApi || IsUserSignedIntoYT()) {
++		YoutubeApiWrappers *apiYouTube = Api();
+ 		if (apiYouTube) {
+ 			ChannelDescription channel_description;
+ 			if (apiYouTube->GetChannelDescription(channel_description)) {
+@@ -108,14 +125,14 @@ void YouTubeAppDock::AddYouTubeAppDock()
+ 	QString bId(QUuid::createUuid().toString());
+ 	bId.replace(QRegularExpression("[{}-]"), "");
+ 	this->setProperty("uuid", bId);
+-	this->setObjectName("youtubeLiveControlPanel");
++	this->setObjectName(accountDockId.isEmpty() ? "youtubeLiveControlPanel" : accountDockId);
+ 	this->resize(580, 500);
+ 	this->setMinimumSize(400, 300);
+ 	this->setAllowedAreas(Qt::AllDockWidgetAreas);
+ 
+ 	OBSBasic::Get()->AddDockWidget(this, Qt::RightDockWidgetArea);
+ 
+-	if (IsYTServiceSelected()) {
++	if (accountApi || IsYTServiceSelected()) {
+ 		const std::string url = InitYTUserUrl();
+ 		CreateBrowserWidget(url);
+ 	} else {
+@@ -129,7 +146,7 @@ void YouTubeAppDock::CreateBrowserWidget(const std::string &url)
+ 	if (dockBrowser) {
+ 		delete dockBrowser;
+ 	}
+-	dockBrowser = cef->create_widget(this, url, panel_cookies);
++	dockBrowser = cef->create_widget(this, url, accountCookies ? accountCookies : panel_cookies);
+ 	if (!dockBrowser) {
+ 		return;
+ 	}
+@@ -174,7 +191,7 @@ void YouTubeAppDock::IngestionStarted()
+ 	OBSDataAutoRelease settings = obs_service_get_settings(service_obj);
+ 	const char *service = obs_data_get_string(settings, "service");
+ 	if (IsYouTubeService(service)) {
+-		if (IsUserSignedIntoYT()) {
++		if (accountApi || IsUserSignedIntoYT()) {
+ 			const char *broadcast_id = obs_data_get_string(settings, "broadcast_id");
+ 			this->IngestionStarted(broadcast_id, YouTubeAppDock::YTSM_ACCOUNT);
+ 		} else {
+@@ -186,6 +203,10 @@ void YouTubeAppDock::IngestionStarted()
+ 
+ void YouTubeAppDock::IngestionStarted(const char *stream_id, streaming_mode_t mode)
+ {
++	if (accountApi) {
++		accountBroadcastId = stream_id;
++		accountSending = true;
++	}
+ 	DispatchYTEvent(INGESTION_STARTED, stream_id, mode);
+ }
+ 
+@@ -197,7 +218,7 @@ void YouTubeAppDock::IngestionStopped()
+ 	const char *service = obs_data_get_string(settings, "service");
+ 
+ 	if (IsYouTubeService(service)) {
+-		if (IsUserSignedIntoYT()) {
++		if (accountApi || IsUserSignedIntoYT()) {
+ 			const char *broadcast_id = obs_data_get_string(settings, "broadcast_id");
+ 			this->IngestionStopped(broadcast_id, YouTubeAppDock::YTSM_ACCOUNT);
+ 		} else {
+@@ -209,6 +230,9 @@ void YouTubeAppDock::IngestionStopped()
+ 
+ void YouTubeAppDock::IngestionStopped(const char *stream_id, streaming_mode_t mode)
+ {
++	if (accountApi) {
++		accountSending = false;
++	}
+ 	DispatchYTEvent(INGESTION_STOPPED, stream_id, mode);
+ }
+ 
+@@ -286,11 +310,17 @@ void YouTubeAppDock::Update()
+ 		dockBrowser->setURL(url);
+ 	}
+ 
+-	// if streaming already run, let's notify YT about past event
+-	if (OBSBasic::Get()->StreamingActive()) {
++	if (!dockBrowser) {
++		return;
++	}
++	// Each account reports its own ingestion, independent of the primary output.
++	if (accountApi) {
++		SetInitEvent(YTSM_ACCOUNT, accountSending ? INGESTION_STARTED : nullptr,
++			     accountBroadcastId.toUtf8().constData(), channelId.toUtf8().constData());
++	} else if (OBSBasic::Get()->StreamingActive()) {
+ 		obs_service_t *service_obj = OBSBasic::Get()->GetService();
+ 		OBSDataAutoRelease settings = obs_service_get_settings(service_obj);
+-		if (IsUserSignedIntoYT()) {
++		if (accountApi || IsUserSignedIntoYT()) {
+ 			channelId.clear(); // renew channelId
+ 			UpdateChannelId();
+ 			const char *broadcast_id = obs_data_get_string(settings, "broadcast_id");
+@@ -309,7 +339,7 @@ void YouTubeAppDock::Update()
+ void YouTubeAppDock::UpdateChannelId()
+ {
+ 	if (channelId.isEmpty()) {
+-		YoutubeApiWrappers *apiYouTube = GetYTApi();
++		YoutubeApiWrappers *apiYouTube = Api();
+ 		if (apiYouTube) {
+ 			ChannelDescription channel_description;
+ 			if (apiYouTube->GetChannelDescription(channel_description)) {
+@@ -324,8 +354,8 @@ void YouTubeAppDock::UpdateChannelId()
+ 
+ void YouTubeAppDock::ReloadChatDock()
+ {
+-	if (IsUserSignedIntoYT()) {
+-		YoutubeApiWrappers *apiYouTube = GetYTApi();
++	if (accountApi || IsUserSignedIntoYT()) {
++		YoutubeApiWrappers *apiYouTube = Api();
+ 		if (apiYouTube) {
+ 			apiYouTube->ReloadChat();
+ 		}
+@@ -385,6 +415,11 @@ void YouTubeAppDock::SetInitEvent(streaming_mode_t mode, const char *event, cons
+ 	dockBrowser->setStartupScript(script);
+ }
+ 
++YoutubeApiWrappers *YouTubeAppDock::Api() const
++{
++	return accountApi ? accountApi.data() : accountDockId.isEmpty() ? GetYTApi() : nullptr;
++}
++
+ YoutubeApiWrappers *YouTubeAppDock::GetYTApi()
+ {
+ 	Auth *auth = OBSBasic::Get()->GetAuth();
+diff --git a/frontend/docks/YouTubeAppDock.hpp b/frontend/docks/YouTubeAppDock.hpp
+index 2e7b79c..6bc58ff 100644
+--- a/frontend/docks/YouTubeAppDock.hpp
++++ b/frontend/docks/YouTubeAppDock.hpp
+@@ -7,15 +7,18 @@
+ class QAction;
+ class QCefWidget;
+ class YoutubeApiWrappers;
++struct QCefCookieManager;
+ 
+ class YouTubeAppDock : public BrowserDock {
+ 	Q_OBJECT
+ 
+ public:
+-	YouTubeAppDock(const QString &title);
++	YouTubeAppDock(const QString &title, YoutubeApiWrappers *account = nullptr, const QString &dockId = {},
++		       QCefCookieManager *cookies = nullptr, const QString &channel = {});
+ 
+ 	enum streaming_mode_t { YTSM_ACCOUNT, YTSM_STREAM_KEY };
+ 
++	void BindAccount(YoutubeApiWrappers *account, const QString &channel);
+ 	void AccountConnected();
+ 	void AccountDisconnected();
+ 	void Update();
+@@ -32,7 +35,7 @@ public:
+ public slots:
+ 	void SettingsUpdated(bool cleanup = false);
+ 
+-protected:
++public:
+ 	void IngestionStarted(const char *stream_id, streaming_mode_t mode);
+ 	void IngestionStopped(const char *stream_id, streaming_mode_t mode);
+ 
+@@ -49,6 +52,12 @@ private:
+ 	void SetInitEvent(streaming_mode_t mode, const char *event = nullptr, const char *video_id = nullptr,
+ 			  const char *channelId = nullptr);
+ 
++	QPointer<YoutubeApiWrappers> accountApi;
++	QString accountDockId;
++	QCefCookieManager *accountCookies = nullptr;
++	QString accountBroadcastId;
++	bool accountSending = false;
++	YoutubeApiWrappers *Api() const;
+ 	QString channelId;
+ 	QPointer<QCefWidget> dockBrowser;
+ };
+diff --git a/frontend/docks/YouTubeChatDock.cpp b/frontend/docks/YouTubeChatDock.cpp
+index 485b2e1..e6f5073 100644
+--- a/frontend/docks/YouTubeChatDock.cpp
++++ b/frontend/docks/YouTubeChatDock.cpp
+@@ -16,20 +16,30 @@ void YoutubeChatDock::YoutubeCookieCheck()
+ {
+ 	QPointer<YoutubeChatDock> this_ = this;
+ 	auto cb = [this_](bool currentlyLoggedIn) {
+-		bool previouslyLoggedIn = this_->isLoggedIn;
+-		this_->isLoggedIn = currentlyLoggedIn;
+-		bool loginStateChanged = (currentlyLoggedIn && !previouslyLoggedIn) ||
+-					 (!currentlyLoggedIn && previouslyLoggedIn);
+-		if (loginStateChanged) {
+-			OBSBasic *main = OBSBasic::Get();
+-			if (main->GetYouTubeAppDock() != nullptr) {
+-				QMetaObject::invokeMethod(main->GetYouTubeAppDock(), &YouTubeAppDock::SettingsUpdated,
+-							  Qt::QueuedConnection, !currentlyLoggedIn);
+-			}
++		if (!this_) {
++			return;
+ 		}
++		QMetaObject::invokeMethod(
++			this_,
++			[this_, currentlyLoggedIn]() {
++				if (!this_) {
++					return;
++				}
++				const bool changed = this_->isLoggedIn != currentlyLoggedIn;
++				this_->isLoggedIn = currentlyLoggedIn;
++				if (changed) {
++					auto dock = this_->controlDock ? this_->controlDock.data()
++								       : OBSBasic::Get()->GetYouTubeAppDock();
++					if (dock) {
++						dock->SettingsUpdated(!currentlyLoggedIn);
++					}
++				}
++			},
++			Qt::QueuedConnection);
+ 	};
+-	if (panel_cookies) {
+-		panel_cookies->CheckForCookie("https://www.youtube.com", "SID", cb);
++	auto manager = cookies ? cookies : panel_cookies;
++	if (manager) {
++		manager->CheckForCookie("https://www.youtube.com", "SID", cb);
+ 	}
+ }
+ #endif
+diff --git a/frontend/docks/YouTubeChatDock.hpp b/frontend/docks/YouTubeChatDock.hpp
+index 034be0e..ce8e3de 100644
+--- a/frontend/docks/YouTubeChatDock.hpp
++++ b/frontend/docks/YouTubeChatDock.hpp
+@@ -2,16 +2,24 @@
+ 
+ #ifdef BROWSER_AVAILABLE
+ #include "BrowserDock.hpp"
++#include "YouTubeAppDock.hpp"
+ 
+ class YoutubeChatDock : public BrowserDock {
+ 	Q_OBJECT
+ 
+ private:
+-	bool isLoggedIn;
++	bool isLoggedIn = false;
++	QCefCookieManager *cookies = nullptr;
++	QPointer<YouTubeAppDock> controlDock;
+ 
+ public:
+ 	YoutubeChatDock(const QString &title) : BrowserDock(title) {}
+ 
++	void SetAccountContext(QCefCookieManager *manager, YouTubeAppDock *dock)
++	{
++		cookies = manager;
++		controlDock = dock;
++	}
+ 	inline void SetWidget(QCefWidget *widget_)
+ 	{
+ 		BrowserDock::SetWidget(widget_);
 diff --git a/frontend/oauth/AuthListener.cpp b/frontend/oauth/AuthListener.cpp
 index 1c955cc..d8d37ac 100644
 --- a/frontend/oauth/AuthListener.cpp
@@ -582,16 +949,17 @@ index 46bd720..0dd9760 100644
  protected:
  	std::string key_;
 diff --git a/frontend/oauth/TwitchAuth.cpp b/frontend/oauth/TwitchAuth.cpp
-index beee869..4663b2d 100644
+index beee869..ce7b805 100644
 --- a/frontend/oauth/TwitchAuth.cpp
 +++ b/frontend/oauth/TwitchAuth.cpp
-@@ -1,4 +1,5 @@
+@@ -1,4 +1,6 @@
  #include "TwitchAuth.hpp"
 +#include "CherriesOAuth.hpp"
++#include "CherriesOAuthProtocol.hpp"
  
  #include <dialogs/OAuthLogin.hpp>
  #include <docks/BrowserDock.hpp>
-@@ -32,7 +33,7 @@ static Auth::Def twitchDef = {"Twitch", Auth::Type::OAuth_StreamKey};
+@@ -32,7 +34,7 @@ static Auth::Def twitchDef = {"Twitch", Auth::Type::OAuth_StreamKey};
  
  /* ------------------------------------------------------------------------- */
  
@@ -600,13 +968,14 @@ index beee869..4663b2d 100644
  {
  	if (!cef) {
  		return;
-@@ -43,6 +44,14 @@ TwitchAuth::TwitchAuth(const Def &d) : OAuthStreamKey(d)
+@@ -43,6 +45,15 @@ TwitchAuth::TwitchAuth(const Def &d) : OAuthStreamKey(d)
  	/* enables javascript-based popups.  basically bttv popups */
  	cef->add_popup_whitelist_url("about:blank#blocked", this);
  
 +	validationTimer.setInterval(60 * 60 * 1000);
 +	connect(&validationTimer, &QTimer::timeout, this, [this]() {
-+		if (uiLoaded && CherriesTwitchEnsureToken(clientId, token, refresh_token, expire_time)) {
++		if (uiLoaded && OBSBasic::Get()->GetAuth() == this &&
++		    CherriesTwitchEnsureToken(clientId, token, refresh_token, expire_time)) {
 +			SaveInternal();
 +			config_save_safe(OBSBasic::Get()->Config(), "tmp", nullptr);
 +		}
@@ -615,7 +984,19 @@ index beee869..4663b2d 100644
  	uiLoadTimer.setSingleShot(true);
  	uiLoadTimer.setInterval(500);
  	connect(&uiLoadTimer, &QTimer::timeout, this, &TwitchAuth::TryLoadSecondaryUIPanes);
-@@ -64,8 +73,7 @@ TwitchAuth::~TwitchAuth()
+@@ -56,16 +67,15 @@ TwitchAuth::~TwitchAuth()
+ 
+ 	OBSBasic *main = OBSBasic::Get();
+ 
+-	main->RemoveDockWidget(TWITCH_CHAT_DOCK_NAME);
+-	main->RemoveDockWidget(TWITCH_INFO_DOCK_NAME);
+-	main->RemoveDockWidget(TWITCH_STATS_DOCK_NAME);
+-	main->RemoveDockWidget(TWITCH_FEED_DOCK_NAME);
++	main->RemoveDockWidget(DockName(TWITCH_CHAT_DOCK_NAME));
++	main->RemoveDockWidget(DockName(TWITCH_INFO_DOCK_NAME));
++	main->RemoveDockWidget(DockName(TWITCH_STATS_DOCK_NAME));
++	main->RemoveDockWidget(DockName(TWITCH_FEED_DOCK_NAME));
+ }
  
  bool TwitchAuth::MakeApiRequest(const char *path, Json &json_out)
  {
@@ -625,7 +1006,7 @@ index beee869..4663b2d 100644
  
  	std::string url = "https://api.twitch.tv/helix/";
  	url += std::string(path);
-@@ -117,12 +125,16 @@ bool TwitchAuth::MakeApiRequest(const char *path, Json &json_out)
+@@ -117,12 +127,16 @@ bool TwitchAuth::MakeApiRequest(const char *path, Json &json_out)
  
  bool TwitchAuth::GetChannelInfo()
  try {
@@ -645,15 +1026,29 @@ index beee869..4663b2d 100644
  	if (token.empty()) {
  		return false;
  	}
-@@ -161,6 +173,7 @@ try {
+@@ -161,8 +175,13 @@ try {
  void TwitchAuth::SaveInternal()
  {
  	OBSBasic *main = OBSBasic::Get();
++	if (main->GetAuth() != this) {
++		return;
++	}
 +	config_set_string(main->Config(), "CherriesAccounts", "TwitchClientId", clientId.c_str());
  	config_set_string(main->Config(), service(), "Name", name.c_str());
  	config_set_string(main->Config(), service(), "UUID", uuid.c_str());
++	config_set_string(main->Config(), service(), "BrowserProfile", browserProfile.c_str());
  
-@@ -207,6 +220,26 @@ static const char *referrer_script1 = "\
+ 	if (uiLoaded) {
+ 		config_set_string(main->Config(), service(), "DockState", main->saveState().toBase64().constData());
+@@ -185,6 +204,7 @@ bool TwitchAuth::LoadInternal()
+ 	OBSBasic *main = OBSBasic::Get();
+ 	name = get_config_str(main, service(), "Name");
+ 	uuid = get_config_str(main, service(), "UUID");
++	browserProfile = get_config_str(main, service(), "BrowserProfile");
+ 
+ 	firstLoad = false;
+ 	return OAuthStreamKey::LoadInternal();
+@@ -207,6 +227,58 @@ static const char *referrer_script1 = "\
  Object.defineProperty(document, 'referrer', {get : function() { return '";
  static const char *referrer_script2 = "'; }});";
  
@@ -669,7 +1064,10 @@ index beee869..4663b2d 100644
 +	if (choice & 2) {
 +		script += ffz_script;
 +	}
-+	if (auto dock = main->findChild<BrowserDock *>(TWITCH_CHAT_DOCK_NAME)) {
++	for (auto dock : main->findChildren<BrowserDock *>()) {
++		if (!dock->objectName().startsWith(TWITCH_CHAT_DOCK_NAME)) {
++			continue;
++		}
 +		if (auto browser = dock->findChild<QCefWidget *>()) {
 +			browser->setStartupScript(script);
 +			browser->reloadPage();
@@ -677,10 +1075,183 @@ index beee869..4663b2d 100644
 +	}
 +}
 +
++void TwitchAuth::ReloadBrowserDocks()
++{
++	if (!uiLoaded) {
++		return;
++	}
++	uiLoadTimer.stop();
++	auto main = OBSBasic::Get();
++	const auto state = main->saveState();
++	for (const char *name :
++	     {TWITCH_CHAT_DOCK_NAME, TWITCH_INFO_DOCK_NAME, TWITCH_STATS_DOCK_NAME, TWITCH_FEED_DOCK_NAME}) {
++		main->RemoveDockWidget(DockName(name));
++	}
++	uiLoaded = false;
++	secondaryLoaded = false;
++	LoadUI();
++	main->restoreState(state);
++}
++
++void TwitchAuth::LoadAccountUI(const QString &id, const QString &label)
++{
++	if (!uiLoaded) {
++		dockSuffix = "-" + QString::fromLatin1(
++					   QCryptographicHash::hash(id.toUtf8(), QCryptographicHash::Sha256).toHex());
++		dockLabel = label;
++		validationTimer.stop(); // The account manager validates and saves each account separately.
++		LoadUI();
++	}
++}
++
  void TwitchAuth::LoadUI()
  {
  	if (!cef) {
-@@ -452,39 +485,21 @@ void TwitchAuth::TryLoadSecondaryUIPanes()
+@@ -220,6 +292,10 @@ void TwitchAuth::LoadUI()
+ 	}
+ 
+ 	OBSBasic::InitBrowserPanelSafeBlock();
++	auto cookies = GetBrowserCookies();
++	if (!cookies) {
++		return;
++	}
+ 	OBSBasic *main = OBSBasic::Get();
+ 
+ 	QCefWidget *browser;
+@@ -250,14 +326,15 @@ void TwitchAuth::LoadUI()
+ 	QPoint pos = main->pos();
+ 
+ 	BrowserDock *chat = new BrowserDock(QTStr("Auth.Chat"));
+-	chat->setObjectName(TWITCH_CHAT_DOCK_NAME);
++	chat->setObjectName(DockName(TWITCH_CHAT_DOCK_NAME));
+ 	chat->resize(300, 600);
+ 	chat->setMinimumSize(200, 300);
+-	chat->setWindowTitle(QTStr("Auth.Chat"));
++	chat->setWindowTitle(dockLabel.isEmpty() ? QTStr("Auth.Chat") : dockLabel + " — Chat");
+ 	chat->setAllowedAreas(Qt::AllDockWidgetAreas);
+ 
+-	browser = cef->create_widget(chat, url, panel_cookies);
++	browser = cef->create_widget(chat, url, cookies);
+ 	chat->SetWidget(browser);
++	browser->allowAllPopups(true);
+ 	cef->add_force_popup_url(moderation_tools_url, chat);
+ 
+ 	if (App()->IsThemeDark()) {
+@@ -285,7 +362,10 @@ void TwitchAuth::LoadUI()
+ 	chat->setFloating(true);
+ 	chat->move(pos.x() + size.width() - chat->width() - 50, pos.y() + 50);
+ 
+-	if (firstLoad) {
++	if (!dockSuffix.isEmpty()) {
++		chat->setVisible(firstLoad);
++		main->restoreDockWidget(chat);
++	} else if (firstLoad) {
+ 		chat->setVisible(true);
+ 	} else {
+ 		const char *dockStateStr = config_get_string(main->Config(), service(), "DockState");
+@@ -300,6 +380,14 @@ void TwitchAuth::LoadUI()
+ 
+ void TwitchAuth::LoadSecondaryUIPanes()
+ {
++	if (secondaryLoaded) {
++		return;
++	}
++	auto cookies = GetBrowserCookies();
++	if (!cookies) {
++		return;
++	}
++	secondaryLoaded = true;
+ 	OBSBasic *main = OBSBasic::Get();
+ 
+ 	QCefWidget *browser;
+@@ -337,13 +425,14 @@ void TwitchAuth::LoadSecondaryUIPanes()
+ 	url += "/stream-manager/edit-stream-info";
+ 
+ 	BrowserDock *info = new BrowserDock(QTStr("Auth.StreamInfo"));
+-	info->setObjectName(TWITCH_INFO_DOCK_NAME);
++	info->setObjectName(DockName(TWITCH_INFO_DOCK_NAME));
+ 	info->resize(300, 650);
+ 	info->setMinimumSize(200, 300);
+-	info->setWindowTitle(QTStr("Auth.StreamInfo"));
++	info->setWindowTitle(dockLabel.isEmpty() ? QTStr("Auth.StreamInfo")
++						 : dockLabel + " — " + QTStr("Auth.StreamInfo"));
+ 	info->setAllowedAreas(Qt::AllDockWidgetAreas);
+ 
+-	browser = cef->create_widget(info, url, panel_cookies);
++	browser = cef->create_widget(info, url, cookies);
+ 	info->SetWidget(browser);
+ 	browser->setStartupScript(script);
+ 
+@@ -356,13 +445,14 @@ void TwitchAuth::LoadSecondaryUIPanes()
+ 	url += "/dashboard/live/stats";
+ 
+ 	BrowserDock *stats = new BrowserDock(QTStr("TwitchAuth.Stats"));
+-	stats->setObjectName(TWITCH_STATS_DOCK_NAME);
++	stats->setObjectName(DockName(TWITCH_STATS_DOCK_NAME));
+ 	stats->resize(200, 250);
+ 	stats->setMinimumSize(200, 150);
+-	stats->setWindowTitle(QTStr("TwitchAuth.Stats"));
++	stats->setWindowTitle(dockLabel.isEmpty() ? QTStr("TwitchAuth.Stats")
++						  : dockLabel + " — " + QTStr("TwitchAuth.Stats"));
+ 	stats->setAllowedAreas(Qt::AllDockWidgetAreas);
+ 
+-	browser = cef->create_widget(stats, url, panel_cookies);
++	browser = cef->create_widget(stats, url, cookies);
+ 	stats->SetWidget(browser);
+ 	browser->setStartupScript(script);
+ 
+@@ -376,13 +466,14 @@ void TwitchAuth::LoadSecondaryUIPanes()
+ 	url += "?uuid=" + uuid;
+ 
+ 	BrowserDock *feed = new BrowserDock(QTStr("TwitchAuth.Feed"));
+-	feed->setObjectName(TWITCH_FEED_DOCK_NAME);
++	feed->setObjectName(DockName(TWITCH_FEED_DOCK_NAME));
+ 	feed->resize(300, 650);
+ 	feed->setMinimumSize(200, 300);
+-	feed->setWindowTitle(QTStr("TwitchAuth.Feed"));
++	feed->setWindowTitle(dockLabel.isEmpty() ? QTStr("TwitchAuth.Feed")
++						 : dockLabel + " — " + QTStr("TwitchAuth.Feed"));
+ 	feed->setAllowedAreas(Qt::AllDockWidgetAreas);
+ 
+-	browser = cef->create_widget(feed, url, panel_cookies);
++	browser = cef->create_widget(feed, url, cookies);
+ 	feed->SetWidget(browser);
+ 	browser->setStartupScript(script);
+ 
+@@ -401,7 +492,12 @@ void TwitchAuth::LoadSecondaryUIPanes()
+ 		    pos.y() + size.height() / 2 - statSize.height() / 2);
+ 	feed->move(pos.x() + 100, pos.y() + 100);
+ 
+-	if (firstLoad) {
++	if (!dockSuffix.isEmpty()) {
++		for (auto dock : {info, stats, feed}) {
++			dock->hide();
++			main->restoreDockWidget(dock);
++		}
++	} else if (firstLoad) {
+ 		info->setVisible(true);
+ 		stats->setVisible(false);
+ 		feed->setVisible(false);
+@@ -441,50 +537,59 @@ void TwitchAuth::TryLoadSecondaryUIPanes()
+ 		}
+ 
+ 		if (!found) {
+-			QMetaObject::invokeMethod(this_, [this_]() { this_->uiLoadTimer.start(); });
++			QMetaObject::invokeMethod(this_, [this_]() {
++				if (this_) {
++					this_->uiLoadTimer.start();
++				}
++			});
+ 		} else {
+ 			QMetaObject::invokeMethod(this_, &TwitchAuth::LoadSecondaryUIPanes);
+ 		}
+ 	};
+ 
+-	panel_cookies->CheckForCookie("https://www.twitch.tv", "auth-token", cb);
++	if (auto cookies = GetBrowserCookies()) {
++		cookies->CheckForCookie("https://www.twitch.tv", "auth-token", cb);
++	}
+ }
  
  bool TwitchAuth::RetryLogin()
  {
@@ -696,15 +1267,17 @@ index beee869..4663b2d 100644
 -	deobfuscate_str(&client_id[0], TWITCH_HASH);
 -
 -	return GetToken(TWITCH_TOKEN_URL, client_id, TWITCH_SCOPE_VERSION, QT_TO_UTF8(login.GetCode()), true);
-+	return CherriesTwitchLogin(OBSBasic::Get(), clientId, token, refresh_token, expire_time);
++	return CherriesTwitchLogin(OBSBasic::Get(), clientId, token, refresh_token, expire_time, GetBrowserCookies());
  }
  
- std::shared_ptr<Auth> TwitchAuth::Login(QWidget *parent, const std::string &)
+-std::shared_ptr<Auth> TwitchAuth::Login(QWidget *parent, const std::string &)
++QCefCookieManager *TwitchAuth::GetBrowserCookies()
  {
 -	OAuthLogin login(parent, TWITCH_AUTH_URL, false);
 -	if (login.exec() == QDialog::Rejected) {
--		return nullptr;
--	}
++	if (!cef) {
+ 		return nullptr;
+ 	}
 -
 -	std::shared_ptr<TwitchAuth> auth = std::make_shared<TwitchAuth>(twitchDef);
 -
@@ -712,15 +1285,32 @@ index beee869..4663b2d 100644
 -	deobfuscate_str(&client_id[0], TWITCH_HASH);
 -
 -	if (!auth->GetToken(TWITCH_TOKEN_URL, client_id, TWITCH_SCOPE_VERSION, QT_TO_UTF8(login.GetCode()))) {
-+	auto auth = std::make_shared<TwitchAuth>(twitchDef);
-+	auth->clientId = CherriesTwitchClient(parent, true);
-+	if (!CherriesTwitchLogin(parent, auth->clientId, auth->token, auth->refresh_token, auth->expire_time)) {
- 		return nullptr;
+-		return nullptr;
++	if (!browserCookies) {
++		OBSBasic::InitBrowserPanelSafeBlock();
++		browserProfile = CherriesOAuthProtocol::TwitchBrowserProfile(QString::fromStdString(browserProfile),
++									     QString::fromStdString(name))
++					 .toStdString();
++		try {
++			browserCookies.reset(cef->create_cookie_manager(browserProfile, true));
++		} catch (const char *error) {
++			blog(LOG_WARNING, "Could not initialize Twitch browser session: %s", error);
++		}
  	}
--
++	return browserCookies.get();
++}
+ 
 -	if (auth->GetChannelInfo()) {
 -		return auth;
--	}
++std::shared_ptr<Auth> TwitchAuth::Login(QWidget *parent, const std::string &)
++{
++	auto auth = std::make_shared<TwitchAuth>(twitchDef);
++	auth->clientId = CherriesTwitchClient(parent, true);
++	auth->browserProfile = "cherries-twitch-" + QUuid::createUuid().toString(QUuid::Id128).toStdString();
++	if (!CherriesTwitchLogin(parent, auth->clientId, auth->token, auth->refresh_token, auth->expire_time,
++				 auth->GetBrowserCookies())) {
++		return nullptr;
+ 	}
 -
 -	return nullptr;
 +	auth->currentScopeVer = TWITCH_SCOPE_VERSION;
@@ -728,7 +1318,7 @@ index beee869..4663b2d 100644
  }
  
  static std::shared_ptr<Auth> CreateTwitchAuth()
-@@ -501,11 +516,5 @@ static void DeleteCookies()
+@@ -501,11 +606,5 @@ static void DeleteCookies()
  
  void RegisterTwitchAuth()
  {
@@ -741,33 +1331,64 @@ index beee869..4663b2d 100644
  	OAuth::RegisterOAuth(twitchDef, CreateTwitchAuth, TwitchAuth::Login, DeleteCookies);
  }
 diff --git a/frontend/oauth/TwitchAuth.hpp b/frontend/oauth/TwitchAuth.hpp
-index bbd8ca4..970a61c 100644
+index bbd8ca4..c76d7d4 100644
 --- a/frontend/oauth/TwitchAuth.hpp
 +++ b/frontend/oauth/TwitchAuth.hpp
-@@ -8,9 +8,12 @@
+@@ -5,12 +5,24 @@
+ #include <json11.hpp>
+ 
+ #include <QTimer>
++#include <memory>
++
++struct QCefCookieManager;
  
  class TwitchAuth : public OAuthStreamKey {
  	Q_OBJECT
 +	friend class CherriesMultistream;
  
  	bool uiLoaded = false;
- 
+-
++	bool secondaryLoaded = false;
++	QString dockSuffix;
++	QString dockLabel;
++	QString DockName(const char *name) const { return QString::fromUtf8(name) + dockSuffix; }
++
 +	std::string clientId;
++	std::string browserProfile;
++	std::shared_ptr<QCefCookieManager> browserCookies;
 +	QTimer validationTimer;
  	std::string name;
  	std::string uuid;
  
-@@ -36,3 +39,5 @@ public slots:
+@@ -25,6 +37,9 @@ class TwitchAuth : public OAuthStreamKey {
+ 	virtual void LoadUI() override;
+ 
+ public:
++	QCefCookieManager *GetBrowserCookies();
++	void LoadAccountUI(const QString &id, const QString &label);
++	void ReloadBrowserDocks();
+ 	TwitchAuth(const Def &d);
+ 	~TwitchAuth();
+ 
+@@ -36,3 +51,5 @@ public slots:
  	void TryLoadSecondaryUIPanes();
  	void LoadSecondaryUIPanes();
  };
 +
 +void CherriesRefreshTwitchAddons();
 diff --git a/frontend/oauth/YoutubeAuth.cpp b/frontend/oauth/YoutubeAuth.cpp
-index 415e5ad..539a27d 100644
+index 415e5ad..c1fcaf9 100644
 --- a/frontend/oauth/YoutubeAuth.cpp
 +++ b/frontend/oauth/YoutubeAuth.cpp
-@@ -13,6 +13,8 @@
+@@ -2,6 +2,7 @@
+ 
+ #ifdef BROWSER_AVAILABLE
+ #include <docks/YouTubeChatDock.hpp>
++#include <docks/YouTubeAppDock.hpp>
+ #endif
+ #include <oauth/AuthListener.hpp>
+ #include <utility/YoutubeApiWrappers.hpp>
+@@ -13,6 +14,8 @@
  
  #include <QDesktopServices>
  #include <QRandomGenerator>
@@ -776,7 +1397,7 @@ index 415e5ad..539a27d 100644
  
  #include "moc_YoutubeAuth.cpp"
  
-@@ -54,7 +56,12 @@ void RegisterYoutubeAuth()
+@@ -54,7 +57,12 @@ void RegisterYoutubeAuth()
  	}
  }
  
@@ -790,16 +1411,120 @@ index 415e5ad..539a27d 100644
  
  YoutubeAuth::~YoutubeAuth()
  {
-@@ -78,6 +85,8 @@ bool YoutubeAuth::RetryLogin()
+@@ -65,7 +73,10 @@ YoutubeAuth::~YoutubeAuth()
+ #ifdef BROWSER_AVAILABLE
+ 	OBSBasic *main = OBSBasic::Get();
+ 
+-	main->RemoveDockWidget(YOUTUBE_CHAT_DOCK_NAME);
++	main->RemoveDockWidget(QString(YOUTUBE_CHAT_DOCK_NAME) + dockSuffix);
++	if (accountControlDock) {
++		main->RemoveDockWidget(accountControlDock->objectName());
++	}
+ 	chat = nullptr;
+ #endif
+ }
+@@ -78,6 +89,11 @@ bool YoutubeAuth::RetryLogin()
  void YoutubeAuth::SaveInternal()
  {
  	OBSBasic *main = OBSBasic::Get();
++	if (main->GetAuth() != this) {
++		return;
++	}
 +	config_set_string(main->Config(), "CherriesAccounts", "YouTubeClientId", googleClient.id.c_str());
 +	config_set_string(main->Config(), "CherriesAccounts", "YouTubeClientSecret", googleClient.secret.c_str());
  	config_set_string(main->Config(), service(), "DockState", main->saveState().toBase64().constData());
  
  	const char *section_name = section.c_str();
-@@ -221,15 +230,20 @@ std::shared_ptr<Auth> YoutubeAuth::Login(QWidget *owner, const std::string &serv
+@@ -106,6 +122,22 @@ bool YoutubeAuth::LoadInternal()
+ 	return implicit ? !token.empty() : !refresh_token.empty();
+ }
+ 
++void YoutubeAuth::LoadAccountUI(const QString &id, const QString &label)
++{
++	if (!uiLoaded) {
++		dockSuffix = "-" + QString::fromLatin1(
++					   QCryptographicHash::hash(id.toUtf8(), QCryptographicHash::Sha256).toHex());
++		dockLabel = label;
++		accountChannelId = id.mid(QString("youtube:").size());
++		LoadUI();
++	}
++}
++
++YouTubeAppDock *YoutubeAuth::GetControlDock() const
++{
++	return dockSuffix.isEmpty() ? OBSBasic::Get()->GetYouTubeAppDock() : accountControlDock.data();
++}
++
+ void YoutubeAuth::LoadUI()
+ {
+ 	if (uiLoaded) {
+@@ -119,19 +151,38 @@ void YoutubeAuth::LoadUI()
+ 
+ 	OBSBasic::InitBrowserPanelSafeBlock();
+ 	OBSBasic *main = OBSBasic::Get();
++	auto cookies = panel_cookies;
++	if (!dockSuffix.isEmpty()) {
++		try {
++			browserCookies.reset(
++				cef->create_cookie_manager(("cherries-youtube" + dockSuffix).toStdString(), true));
++		} catch (const char *error) {
++			blog(LOG_WARNING, "Could not initialize YouTube browser session: %s", error);
++			return;
++		}
++		cookies = browserCookies.get();
++		if (!cookies) {
++			return;
++		}
++		accountControlDock = new YouTubeAppDock(dockLabel + " — Live Control Panel",
++							dynamic_cast<YoutubeApiWrappers *>(this),
++							"youtubeLiveControlPanel" + dockSuffix, cookies,
++							accountChannelId);
++	}
+ 
+ 	QCefWidget *browser;
+ 
+ 	QSize size = main->frameSize();
+ 	QPoint pos = main->pos();
+ 
+-	chat = new YoutubeChatDock(QTStr("Auth.Chat"));
+-	chat->setObjectName(YOUTUBE_CHAT_DOCK_NAME);
++	chat = new YoutubeChatDock(dockLabel.isEmpty() ? QTStr("Auth.Chat") : dockLabel + " — Chat");
++	chat->setObjectName(QString(YOUTUBE_CHAT_DOCK_NAME) + dockSuffix);
++	chat->SetAccountContext(cookies, GetControlDock());
+ 	chat->resize(300, 600);
+ 	chat->setMinimumSize(200, 300);
+ 	chat->setAllowedAreas(Qt::AllDockWidgetAreas);
+ 
+-	browser = cef->create_widget(chat, YOUTUBE_CHAT_PLACEHOLDER_URL, panel_cookies);
++	browser = cef->create_widget(chat, YOUTUBE_CHAT_PLACEHOLDER_URL, cookies);
+ 
+ 	chat->SetWidget(browser);
+ 	main->AddDockWidget(chat, Qt::RightDockWidgetArea);
+@@ -139,16 +190,19 @@ void YoutubeAuth::LoadUI()
+ 	chat->setFloating(true);
+ 	chat->move(pos.x() + size.width() - chat->width() - 50, pos.y() + 50);
+ 
+-	if (firstLoad) {
+-		chat->setVisible(true);
++	chat->setVisible(firstLoad);
++	if (!dockSuffix.isEmpty()) {
++		main->restoreDockWidget(chat);
++		accountControlDock->hide();
++		main->restoreDockWidget(accountControlDock);
+ 	}
+ #endif
+ 
+-	if (!main->GetYouTubeAppDock()) {
++	if (dockSuffix.isEmpty() && !main->GetYouTubeAppDock()) {
+ 		main->NewYouTubeAppDock();
+ 	}
+ 
+-	if (!firstLoad) {
++	if (!firstLoad && dockSuffix.isEmpty()) {
+ 		const char *dockStateStr = config_get_string(main->Config(), service(), "DockState");
+ 		QByteArray dockState = QByteArray::fromBase64(QByteArray(dockStateStr));
+ 		main->restoreState(dockState);
+@@ -221,15 +275,20 @@ std::shared_ptr<Auth> YoutubeAuth::Login(QWidget *owner, const std::string &serv
  	dlg.setWindowFlags(dlg.windowFlags() & ~Qt::WindowCloseButtonHint);
  	dlg.setWindowTitle(QTStr("YouTube.Auth.WaitingAuth.Title"));
  
@@ -824,7 +1549,7 @@ index 415e5ad..539a27d 100644
  	QString url_template;
  	url_template += "%1";
  	url_template += "?response_type=code";
-@@ -238,6 +252,8 @@ std::shared_ptr<Auth> YoutubeAuth::Login(QWidget *owner, const std::string &serv
+@@ -238,6 +297,8 @@ std::shared_ptr<Auth> YoutubeAuth::Login(QWidget *owner, const std::string &serv
  	url_template += "&state=%4";
  	url_template += "&scope=https://www.googleapis.com/auth/youtube";
  	QString url = url_template.arg(YOUTUBE_AUTH_URL, clientid.c_str(), redirect_uri, state);
@@ -833,7 +1558,7 @@ index 415e5ad..539a27d 100644
  
  	QString text = QTStr("YouTube.Auth.WaitingAuth.Text");
  	text = text.arg(QString("<a href='%1'>Google OAuth Service</a>").arg(url));
-@@ -262,7 +278,7 @@ std::shared_ptr<Auth> YoutubeAuth::Login(QWidget *owner, const std::string &serv
+@@ -262,7 +323,7 @@ std::shared_ptr<Auth> YoutubeAuth::Login(QWidget *owner, const std::string &serv
  	// Async Login.
  	connect(&server, &AuthListener::ok, &dlg, [&dlg, &auth_code](QString code) {
  #ifdef _DEBUG
@@ -842,7 +1567,7 @@ index 415e5ad..539a27d 100644
  #endif
  		auth_code = code;
  		dlg.accept();
-@@ -280,6 +296,7 @@ std::shared_ptr<Auth> YoutubeAuth::Login(QWidget *owner, const std::string &serv
+@@ -280,6 +341,7 @@ std::shared_ptr<Auth> YoutubeAuth::Login(QWidget *owner, const std::string &serv
  	QScopedPointer<QThread> thread(CreateQThread(open_external_browser));
  	thread->start();
  
@@ -850,7 +1575,7 @@ index 415e5ad..539a27d 100644
  	dlg.exec();
  
  	if (dlg.result() == QMessageBox::Cancel || dlg.result() == QDialog::Rejected) {
-@@ -287,7 +304,7 @@ std::shared_ptr<Auth> YoutubeAuth::Login(QWidget *owner, const std::string &serv
+@@ -287,7 +349,7 @@ std::shared_ptr<Auth> YoutubeAuth::Login(QWidget *owner, const std::string &serv
  	}
  
  	if (!auth->GetToken(YOUTUBE_TOKEN_URL, clientid, secret, QT_TO_UTF8(redirect_uri), YOUTUBE_SCOPE_VERSION,
@@ -860,24 +1585,33 @@ index 415e5ad..539a27d 100644
  	}
  
 diff --git a/frontend/oauth/YoutubeAuth.hpp b/frontend/oauth/YoutubeAuth.hpp
-index cecc5f2..831101c 100644
+index cecc5f2..afe9eb9 100644
 --- a/frontend/oauth/YoutubeAuth.hpp
 +++ b/frontend/oauth/YoutubeAuth.hpp
-@@ -1,6 +1,7 @@
+@@ -1,6 +1,11 @@
  #pragma once
  
  #include "OAuth.hpp"
 +#include "CherriesOAuth.hpp"
++#include <QPointer>
++#include <memory>
++struct QCefCookieManager;
++class YouTubeAppDock;
  
  inline const std::vector<Auth::Def> youtubeServices = {{"YouTube - RTMP", Auth::Type::OAuth_LinkedAccount, true, true},
  						       {"YouTube - RTMPS", Auth::Type::OAuth_LinkedAccount, true, true},
-@@ -12,10 +13,15 @@ class YoutubeChatDock;
+@@ -12,10 +17,20 @@ class YoutubeChatDock;
  
  class YoutubeAuth : public OAuthStreamKey {
  	Q_OBJECT
 +	friend class CherriesMultistream;
  
  	bool uiLoaded = false;
++	QString dockSuffix;
++	QString dockLabel;
++	QString accountChannelId;
++	std::shared_ptr<QCefCookieManager> browserCookies;
++	QPointer<YouTubeAppDock> accountControlDock;
  	std::string section;
  
 +protected:
@@ -887,6 +1621,15 @@ index cecc5f2..831101c 100644
  #ifdef BROWSER_AVAILABLE
  	YoutubeChatDock *chat = nullptr;
  #endif
+@@ -31,6 +46,8 @@ public:
+ 	YoutubeAuth(const Def &d);
+ 	~YoutubeAuth();
+ 
++	void LoadAccountUI(const QString &id, const QString &label);
++	YouTubeAppDock *GetControlDock() const;
+ 	void SetChatId(const QString &chat_id);
+ 	void ResetChat();
+ 	void ReloadChat();
 diff --git a/frontend/settings/OBSBasicSettings.cpp b/frontend/settings/OBSBasicSettings.cpp
 index 1a48514..f4966bd 100644
 --- a/frontend/settings/OBSBasicSettings.cpp
@@ -942,17 +1685,47 @@ index 1307e26..ff8d0fb 100644
  		} else {
  			ui->bandwidthTestEnable->setChecked(false);
  		}
+diff --git a/frontend/utility/AdvancedOutput.cpp b/frontend/utility/AdvancedOutput.cpp
+index 5adac3f..145470f 100644
+--- a/frontend/utility/AdvancedOutput.cpp
++++ b/frontend/utility/AdvancedOutput.cpp
+@@ -617,6 +617,11 @@ inline std::optional<size_t> AdvancedOutput::VodTrackMixerIdx(obs_service_t *ser
+ 
+ inline void AdvancedOutput::SetupVodTrack(obs_service_t *service)
+ {
++	OBSDataAutoRelease settings = obs_service_get_settings(service);
++	if (obs_data_get_bool(settings, "cherries_multistream")) {
++		return; // Account-specific live/VOD encoders were configured before StartStreaming.
++	}
++
+ 	if (VodTrackMixerIdx(service).has_value()) {
+ 		obs_output_set_audio_encoder(streamOutput, streamArchiveEnc, 1);
+ 	} else {
 diff --git a/frontend/utility/BasicOutputHandler.cpp b/frontend/utility/BasicOutputHandler.cpp
-index 74cd06e..dbd0649 100644
+index 74cd06e..315257c 100644
 --- a/frontend/utility/BasicOutputHandler.cpp
 +++ b/frontend/utility/BasicOutputHandler.cpp
-@@ -458,7 +458,15 @@ std::shared_future<void> BasicOutputHandler::SetupMultitrackVideo(obs_service_t
+@@ -458,7 +458,29 @@ std::shared_future<void> BasicOutputHandler::SetupMultitrackVideo(obs_service_t
  								  std::function<void(std::optional<bool>)> continuation)
  {
  	auto start_streaming_guard = std::make_shared<StartMultitrackVideoStreamingGuard>();
 -	if (!multitrackVideo) {
 +	OBSDataAutoRelease cherriesSettings = obs_service_get_settings(service);
-+	const bool sharedMultistream = obs_data_get_bool(cherriesSettings, "cherries_multistream");
++	const bool managed = obs_data_get_bool(cherriesSettings, "cherries_multistream");
++	const bool enhanced = managed && obs_data_get_bool(cherriesSettings, "cherries_enhanced");
++	const bool sharedMultistream = managed && !enhanced;
++	if (enhanced) {
++		if (!multitrackVideo) {
++			multitrackVideo = make_unique<MultitrackVideoOutput>();
++		}
++		const int live = int(obs_data_get_int(cherriesSettings, "cherries_audio_track"));
++		const int vod = int(obs_data_get_int(cherriesSettings, "cherries_vod_track"));
++		if (live >= 1 && live <= MAX_AUDIO_MIXES) {
++			main_audio_mixer = size_t(live - 1);
++		}
++		vod_track_mixer = vod >= 1 && vod <= MAX_AUDIO_MIXES && vod != live ? std::optional<size_t>(vod - 1)
++										    : std::nullopt;
++	}
 +	if (sharedMultistream) {
 +		if (multitrackVideoActive) {
 +			outputType.clear();
@@ -963,6 +1736,22 @@ index 74cd06e..dbd0649 100644
  		continuation(std::nullopt);
  		return start_streaming_guard->GetFuture();
  	}
+diff --git a/frontend/utility/SimpleOutput.cpp b/frontend/utility/SimpleOutput.cpp
+index 4fe910d..c50a4fe 100644
+--- a/frontend/utility/SimpleOutput.cpp
++++ b/frontend/utility/SimpleOutput.cpp
+@@ -706,6 +706,11 @@ bool SimpleOutput::IsVodTrackEnabled(obs_service_t *service)
+ 
+ void SimpleOutput::SetupVodTrack(obs_service_t *service)
+ {
++	OBSDataAutoRelease settings = obs_service_get_settings(service);
++	if (obs_data_get_bool(settings, "cherries_multistream")) {
++		return; // Account-specific live/VOD encoders were configured before StartStreaming.
++	}
++
+ 	if (IsVodTrackEnabled(service)) {
+ 		obs_output_set_audio_encoder(streamOutput, audioArchive, 1);
+ 	} else {
 diff --git a/frontend/utility/YoutubeApiWrappers.cpp b/frontend/utility/YoutubeApiWrappers.cpp
 index 731a88c..4ba3342 100644
 --- a/frontend/utility/YoutubeApiWrappers.cpp
@@ -981,7 +1770,7 @@ index 731a88c..4ba3342 100644
  	std::string r_token = QUrl::toPercentEncoding(refresh_token.c_str()).toStdString();
  	const QString data_template = "client_id=%1"
 diff --git a/frontend/widgets/OBSBasic.cpp b/frontend/widgets/OBSBasic.cpp
-index 049a8b8..07356ae 100644
+index 049a8b8..a3af5bf 100644
 --- a/frontend/widgets/OBSBasic.cpp
 +++ b/frontend/widgets/OBSBasic.cpp
 @@ -18,6 +18,7 @@
@@ -992,14 +1781,14 @@ index 049a8b8..07356ae 100644
  #include "ui-config.h"
  
  #include "ColorSelect.hpp"
-@@ -1249,6 +1250,7 @@ void OBSBasic::OBSInit()
+@@ -1263,6 +1264,7 @@ void OBSBasic::OnFirstLoad()
+ #endif
  
- void OBSBasic::OnFirstLoad()
- {
+ 	Auth::Load();
 +	CherriesInstallMultistream(this);
- 	OnEvent(OBS_FRONTEND_EVENT_FINISHED_LOADING);
  
- #ifdef WHATSNEW_ENABLED
+ 	bool showLogViewerOnStartup = config_get_bool(App()->GetUserConfig(), "LogViewer", "ShowLogStartup");
+ 
 diff --git a/frontend/widgets/OBSBasic.hpp b/frontend/widgets/OBSBasic.hpp
 index 571de9f..2b78886 100644
 --- a/frontend/widgets/OBSBasic.hpp
@@ -1169,7 +1958,7 @@ index 4dae83b..aa2a00c 100644
  	inline ~OBSBasicControls() {}
  
 diff --git a/frontend/widgets/OBSBasic_Streaming.cpp b/frontend/widgets/OBSBasic_Streaming.cpp
-index bd6deb5..1daf74f 100644
+index bd6deb5..4dd9cb3 100644
 --- a/frontend/widgets/OBSBasic_Streaming.cpp
 +++ b/frontend/widgets/OBSBasic_Streaming.cpp
 @@ -18,6 +18,8 @@
@@ -1191,7 +1980,7 @@ index bd6deb5..1daf74f 100644
  	if (outputHandler->StreamingActive()) {
  		return;
  	}
-@@ -80,12 +85,30 @@ void OBSBasic::StartStreaming()
+@@ -80,12 +85,31 @@ void OBSBasic::StartStreaming()
  		sysTrayStream->setText("Basic.Main.PreparingStream");
  	}
  
@@ -1206,9 +1995,10 @@ index bd6deb5..1daf74f 100644
  		}
  
 +		OBSDataAutoRelease serviceSettings = obs_service_get_settings(service);
-+		if (obs_data_get_bool(serviceSettings, "cherries_multistream") &&
++		if (obs_data_get_bool(serviceSettings, "cherries_require_shared_h264") &&
 +		    !CherriesCanShareOutput(outputHandler->StreamingOutput())) {
-+			outputHandler->lastError = "Use H.264 video and AAC audio for shared multistream encoding.";
++			outputHandler->lastError =
++				"Shared destinations need an H.264 video rendition and AAC audio. If Enhanced Broadcasting did not provide these, disable it or stream only to that Twitch account.";
 +			DisplayStreamStartError();
 +			return;
 +		}
@@ -1223,7 +2013,7 @@ index bd6deb5..1daf74f 100644
  		OnEvent(OBS_FRONTEND_EVENT_STREAMING_STARTING);
  
  		SaveProject();
-@@ -422,6 +445,11 @@ void OBSBasic::StreamActionTriggered()
+@@ -422,6 +446,11 @@ void OBSBasic::StreamActionTriggered()
  			return;
  		}
  

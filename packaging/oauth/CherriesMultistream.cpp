@@ -1,13 +1,17 @@
 #include "CherriesMultistream.hpp"
 #include "CherriesOAuth.hpp"
+#include "CherriesOAuthProtocol.hpp"
 #include "CherriesSharedOutput.hpp"
-#include "CherriesTwitchBroadcast.hpp"
 #include "TwitchAuth.hpp"
 #include "YoutubeAuth.hpp"
 #include <dialogs/OBSYoutubeActions.hpp>
 #include <utility/YoutubeApiWrappers.hpp>
+#include <utility/BasicOutputHandler.hpp>
+#include <docks/YouTubeAppDock.hpp>
+#include <QThread>
 #include <widgets/OBSBasic.hpp>
 #include <widgets/OBSBasicControls.hpp>
+#include <browser-panel.hpp>
 #include <settings/OBSBasicSettings.hpp>
 #include <qt-wrappers.hpp>
 #include <obs-frontend-api.h>
@@ -37,6 +41,8 @@
 #include <QTimer>
 #include <QVBoxLayout>
 
+extern QCef *cef;
+
 class CherriesMultistream : public QWidget {
 	struct Account {
 		QString id;
@@ -44,6 +50,12 @@ class CherriesMultistream : public QWidget {
 		std::shared_ptr<OAuth> auth;
 		bool selected = true;
 		int audioTrack = 0; // 0 retains the normal OBS streaming track.
+		int vodTrack = 0;   // 0 uses normal live audio for the Twitch archive.
+		bool enhanced = false;
+		QString streamId;
+		bool autoStart = true;
+		bool autoStop = true;
+		bool ingestReported = false;
 		QString server;
 		QString key;
 		QString status = "Offline";
@@ -68,8 +80,10 @@ class CherriesMultistream : public QWidget {
 	QTimer validate;
 	QTimer startup;
 	bool running = false;
+	bool shuttingDown = false;
 	bool preparing = false;
 	Account *primary = nullptr;
+	int defaultAudioTrack = 1;
 	CherriesAudioEncoders audioEncoders;
 	OBSEncoderAutoRelease audioTemplate;
 	OBSServiceAutoRelease previousService;
@@ -87,6 +101,8 @@ class CherriesMultistream : public QWidget {
 
 	void Save()
 	{
+		if (shuttingDown)
+			return;
 		QJsonArray list;
 		for (const auto &account : accounts) {
 			const auto &auth = account->auth;
@@ -95,6 +111,12 @@ class CherriesMultistream : public QWidget {
 					   {"service", auth->service()},
 					   {"selected", account->selected},
 					   {"audio_track", account->audioTrack},
+					   {"vod_track", account->vodTrack},
+					   {"enhanced", account->enhanced},
+					   {"broadcast", account->broadcast},
+					   {"stream_id", account->streamId},
+					   {"auto_start", account->autoStart},
+					   {"auto_stop", account->autoStop},
 					   {"token", QString::fromStdString(auth->token)},
 					   {"refresh", QString::fromStdString(auth->refresh_token)},
 					   {"expiry", QString::number(auth->expire_time)},
@@ -102,6 +124,7 @@ class CherriesMultistream : public QWidget {
 			if (auto twitch = dynamic_cast<TwitchAuth *>(auth.get())) {
 				record["client"] = QString::fromStdString(twitch->clientId);
 				record["name"] = QString::fromStdString(twitch->name);
+				record["browser_profile"] = QString::fromStdString(twitch->browserProfile);
 			} else if (auto youtube = dynamic_cast<YoutubeAuth *>(auth.get())) {
 				record["client"] = QString::fromStdString(youtube->googleClient.id);
 				record["secret"] = QString::fromStdString(youtube->googleClient.secret);
@@ -130,7 +153,7 @@ class CherriesMultistream : public QWidget {
 		for (const auto &value : QJsonDocument::fromJson(file.readAll()).array()) {
 			const auto record = value.toObject();
 			const auto service = record.value("service").toString();
-			if (service != "Twitch" && service != "YouTube - RTMPS")
+			if (service != "Twitch" && !IsYouTubeService(service.toStdString()))
 				continue;
 			auto auth = std::dynamic_pointer_cast<OAuth>(Auth::Create(service.toStdString()));
 			if (!auth || record.value("refresh").toString().isEmpty())
@@ -142,6 +165,7 @@ class CherriesMultistream : public QWidget {
 			if (auto twitch = dynamic_cast<TwitchAuth *>(auth.get())) {
 				twitch->clientId = record.value("client").toString().toStdString();
 				twitch->name = record.value("name").toString().toStdString();
+				twitch->browserProfile = record.value("browser_profile").toString().toStdString();
 			} else if (auto youtube = dynamic_cast<YoutubeAuth *>(auth.get())) {
 				youtube->googleClient = {record.value("client").toString().toStdString(),
 							 record.value("secret").toString().toStdString()};
@@ -151,9 +175,44 @@ class CherriesMultistream : public QWidget {
 			account->label = record.value("label").toString();
 			account->auth = auth;
 			account->selected = record.value("selected").toBool();
+			account->broadcast = record.value("broadcast").toString();
+			account->streamId = record.value("stream_id").toString();
+			account->autoStart = record.value("auto_start").toBool(true);
+			account->autoStop = record.value("auto_stop").toBool(true);
+			auth->firstLoad = false;
 			const int track = record.value("audio_track").toInt();
 			account->audioTrack = track >= 0 && track <= MAX_AUDIO_MIXES ? track : 0;
+			if (dynamic_cast<TwitchAuth *>(auth.get())) {
+				const int vod = record.value("vod_track").toInt(-1);
+				account->vodTrack = vod >= -1 && vod <= MAX_AUDIO_MIXES ? vod : -1;
+				account->enhanced = record.value("enhanced").toBool();
+			}
 			accounts.push_back(std::move(account));
+		}
+	}
+
+	void EnsureDocks()
+	{
+		for (const auto &account : accounts) {
+			if (!account->connected)
+				continue;
+			if (auto twitch = dynamic_cast<TwitchAuth *>(account->auth.get())) {
+				if (account->auth == main->auth)
+					twitch->LoadUI();
+				else
+					twitch->LoadAccountUI(account->id, account->label);
+			} else if (auto youtube = dynamic_cast<YoutubeAuth *>(account->auth.get())) {
+				const bool hadUI = youtube->uiLoaded;
+				if (account->auth == main->auth)
+					youtube->LoadUI();
+				else
+					youtube->LoadAccountUI(account->id, account->label);
+				if (auto dock = youtube->GetControlDock())
+					dock->BindAccount(dynamic_cast<YoutubeApiWrappers *>(youtube),
+							  account->id.mid(QString("youtube:").size()));
+				if (!hadUI && !account->broadcast.isEmpty())
+					youtube->SetChatId(account->broadcast);
+			}
 		}
 	}
 
@@ -191,6 +250,39 @@ class CherriesMultistream : public QWidget {
 					});
 			}
 			table->cellWidget(i, 3)->setEnabled(!busy);
+			if (dynamic_cast<TwitchAuth *>(account.auth.get())) {
+				if (!table->cellWidget(i, 4)) {
+					auto vod = new QComboBox(table);
+					vod->addItem("OBS default", -1);
+					vod->addItem("Disabled", 0);
+					for (int track = 1; track <= MAX_AUDIO_MIXES; ++track)
+						vod->addItem(QString("Track %1").arg(track), track);
+					vod->setCurrentIndex(account.vodTrack + 1);
+					vod->setToolTip(
+						"Separate audio for Twitch VODs. Assign each source to tracks in Advanced Audio Properties. Disabled uses live audio for the VOD.");
+					table->setCellWidget(i, 4, vod);
+					connect(vod, qOverload<int>(&QComboBox::currentIndexChanged), this,
+						[this, ptr = &account](int track) {
+							ptr->vodTrack = track - 1;
+							Save();
+						});
+					auto enhanced = new QCheckBox(table);
+					enhanced->setChecked(account.enhanced);
+					enhanced->setToolTip(
+						"Use Twitch Enhanced Broadcasting for this account. Twitch may request several video encodes. Other destinations reuse a compatible H.264 rendition when available.");
+					table->setCellWidget(i, 5, enhanced);
+					connect(enhanced, &QCheckBox::toggled, this,
+						[this, ptr = &account](bool enabled) {
+							ptr->enhanced = enabled;
+							Save();
+						});
+				}
+				table->cellWidget(i, 4)->setEnabled(!busy);
+				table->cellWidget(i, 5)->setEnabled(!busy);
+			} else {
+				table->setItem(i, 4, new QTableWidgetItem("—"));
+				table->setItem(i, 5, new QTableWidgetItem("—"));
+			}
 		}
 		QStringList states;
 		bool twitchConnected = false, youtubeConnected = false;
@@ -245,6 +337,32 @@ class CherriesMultistream : public QWidget {
 		}
 		for (auto &existing : accounts) {
 			if (existing->id == account->id) {
+				// Keep the native OBS connection in sync so ImportNative cannot restore an older session.
+				auto connected = std::dynamic_pointer_cast<TwitchAuth>(account->auth);
+				auto native = std::dynamic_pointer_cast<TwitchAuth>(main->auth);
+				if (connected && native && connected->name == native->name) {
+					native->clientId = connected->clientId;
+					native->token = connected->token;
+					native->refresh_token = connected->refresh_token;
+					native->expire_time = connected->expire_time;
+					native->browserProfile = connected->browserProfile;
+					native->browserCookies = connected->browserCookies;
+					native->ReloadBrowserDocks();
+					account->auth = native;
+					Auth::Save();
+				}
+				if (existing->auth == main->auth) {
+					auto saved = std::dynamic_pointer_cast<YoutubeAuth>(existing->auth);
+					auto refreshed = std::dynamic_pointer_cast<YoutubeAuth>(account->auth);
+					if (saved && refreshed) {
+						saved->googleClient = refreshed->googleClient;
+						saved->token = refreshed->token;
+						saved->refresh_token = refreshed->refresh_token;
+						saved->expire_time = refreshed->expire_time;
+						account->auth = saved;
+						Auth::Save();
+					}
+				}
 				existing->auth = account->auth;
 				existing->connected = true;
 				existing->key.clear();
@@ -290,16 +408,104 @@ class CherriesMultistream : public QWidget {
 		Update();
 	}
 
+	void ReportIngestion(Account &account, bool sending)
+	{
+		if (account.ingestReported == sending)
+			return;
+		account.ingestReported = sending;
+		if (auto youtube = dynamic_cast<YoutubeAuth *>(account.auth.get())) {
+			if (auto dock = youtube->GetControlDock()) {
+				if (sending)
+					dock->IngestionStarted(account.broadcast.toUtf8().constData(),
+							       YouTubeAppDock::YTSM_ACCOUNT);
+				else
+					dock->IngestionStopped(account.broadcast.toUtf8().constData(),
+							       YouTubeAppDock::YTSM_ACCOUNT);
+			}
+		}
+	}
+
 	void StopExtra()
 	{
 		for (auto &account : accounts) {
 			if (account->output)
 				obs_output_force_stop(account->output);
+			ReportIngestion(*account, false);
 			account->status = account->key.isEmpty() || dynamic_cast<TwitchAuth *>(account->auth.get())
 						  ? "Offline"
 						  : "Broadcast ready";
 		}
 		Update();
+	}
+
+	int LiveTrack(const Account &account) const
+	{
+		return account.audioTrack ? account.audioTrack : defaultAudioTrack;
+	}
+	int VodTrack(const Account &account) const
+	{
+		if (!dynamic_cast<TwitchAuth *>(account.auth.get()))
+			return 0;
+		if (account.vodTrack >= 0)
+			return account.vodTrack;
+		const char *mode = config_get_string(main->Config(), "Output", "Mode");
+		const bool advanced = mode && strcmp(mode, "Advanced") == 0;
+		if (!config_get_bool(main->Config(), advanced ? "AdvOut" : "SimpleOutput", "VodTrackEnabled"))
+			return 0;
+		const int track = advanced ? int(config_get_int(main->Config(), "AdvOut", "VodTrackIndex")) : 2;
+		return track >= 1 && track <= MAX_AUDIO_MIXES ? track : 0;
+	}
+
+	obs_encoder_t *VodEncoder(const Account &account)
+	{
+		const int track = VodTrack(account);
+		return track > 0 ? audioEncoders.Get(audioTemplate, track) : nullptr;
+	}
+	bool HasExtraSelected() const
+	{
+		for (const auto &account : accounts)
+			if (account->selected && account.get() != primary)
+				return true;
+		return false;
+	}
+	OBSServiceAutoRelease CreateService(const Account &account, bool isPrimary)
+	{
+		OBSDataAutoRelease settings = obs_data_create();
+		const bool twitch = dynamic_cast<TwitchAuth *>(account.auth.get()) != nullptr;
+		OBSDataAutoRelease native =
+			obs_service_get_settings(previousService ? previousService.Get() : main->GetService());
+		const std::string nativeName = obs_data_get_string(native, "service");
+		const std::string serviceName = twitch                         ? "Twitch"
+						: IsYouTubeService(nativeName) ? nativeName
+									       : account.auth->service();
+		obs_data_set_string(settings, "service", serviceName.c_str());
+		const char *server =
+			twitch ? "auto"
+			: serviceName == "YouTube - HLS"
+				? "https://a.upload.youtube.com/http_upload_hls?cid={stream_key}&copy=0&file=out.m3u8"
+			: serviceName == "YouTube - RTMP" ? "rtmp://a.rtmp.youtube.com/live2"
+							  : "rtmps://a.rtmps.youtube.com/live2";
+		if (nativeName == serviceName && *obs_data_get_string(native, "server")) {
+			server = obs_data_get_string(native, "server");
+			obs_data_set_bool(settings, "using_custom_server",
+					  obs_data_get_bool(native, "using_custom_server"));
+			if (twitch)
+				obs_data_set_bool(settings, "bwtest", obs_data_get_bool(native, "bwtest"));
+		}
+		obs_data_set_string(settings, "server", server);
+		const auto streamKey =
+			twitch ? CherriesOAuthProtocol::TwitchStreamKey(account.key.toStdString(),
+									obs_data_get_bool(settings, "bwtest"))
+			       : account.key.toStdString();
+		obs_data_set_string(settings, "key", streamKey.c_str());
+		if (isPrimary) {
+			obs_data_set_bool(settings, "cherries_multistream", true);
+			obs_data_set_bool(settings, "cherries_enhanced", twitch && account.enhanced);
+			obs_data_set_bool(settings, "cherries_require_shared_h264", HasExtraSelected());
+			obs_data_set_int(settings, "cherries_audio_track", LiveTrack(account));
+			obs_data_set_int(settings, "cherries_vod_track", VodTrack(account));
+		}
+		return obs_service_create("rtmp_common", account.id.toUtf8().constData(), settings, nullptr);
 	}
 
 	void Begin()
@@ -309,6 +515,24 @@ class CherriesMultistream : public QWidget {
 		preparing = true;
 		Update();
 		primary = nullptr;
+		const char *mode = config_get_string(main->Config(), "Output", "Mode");
+		defaultAudioTrack = mode && strcmp(mode, "Advanced") == 0
+					    ? int(config_get_int(main->Config(), "AdvOut", "TrackIndex"))
+					    : 1;
+		if (defaultAudioTrack < 1 || defaultAudioTrack > MAX_AUDIO_MIXES)
+			defaultAudioTrack = 1;
+		int enhancedCount = 0;
+		for (const auto &account : accounts)
+			if (account->selected && account->enhanced)
+				++enhancedCount;
+		if (enhancedCount > 1) {
+			preparing = false;
+			Update();
+			QMessageBox::information(
+				main, "Enhanced Broadcasting",
+				"Enable Enhanced Broadcasting on one Twitch account at a time. Other selected accounts can share its H.264 video rendition.");
+			return;
+		}
 		for (auto &account : accounts) {
 			account->output = nullptr;
 			account->service = nullptr;
@@ -329,7 +553,7 @@ class CherriesMultistream : public QWidget {
 				account->server = "rtmp://live.twitch.tv/app";
 				account->key = QString::fromStdString(twitch->key());
 			} else {
-				if (account->key.isEmpty()) {
+				if (account->broadcast.isEmpty()) {
 					preparing = false;
 					Update();
 					QMessageBox::information(
@@ -352,9 +576,36 @@ class CherriesMultistream : public QWidget {
 					QMessageBox::warning(main, "YouTube broadcast", message->text());
 					return;
 				}
+				const auto item = latest["items"][0];
+				account->streamId =
+					QString::fromStdString(item["contentDetails"]["boundStreamId"].string_value());
+				account->autoStart = item["contentDetails"]["enableAutoStart"].bool_value();
+				account->autoStop = item["contentDetails"]["enableAutoStop"].bool_value();
+				json11::Json stream;
+				if (account->streamId.isEmpty() || !youtube->FindStream(account->streamId, stream)) {
+					preparing = false;
+					Update();
+					QMessageBox::warning(
+						main, "YouTube broadcast",
+						"Could not load this broadcast's stream. Select it again in Manage Broadcast.");
+					return;
+				}
+				account->key = QString::fromStdString(
+					stream["items"][0]["cdn"]["ingestionInfo"]["streamName"].string_value());
+				account->server = "rtmps://a.rtmps.youtube.com/live2";
+				if (account->key.isEmpty()) {
+					preparing = false;
+					Update();
+					QMessageBox::warning(
+						main, "YouTube broadcast",
+						"YouTube did not return a stream key. Select the broadcast again.");
+					return;
+				}
 			}
 
-			if (!primary)
+			if (!primary || account->enhanced ||
+			    (!primary->enhanced && !dynamic_cast<TwitchAuth *>(primary->auth.get()) &&
+			     dynamic_cast<TwitchAuth *>(account->auth.get())))
 				primary = account.get();
 		}
 		Save();
@@ -364,12 +615,7 @@ class CherriesMultistream : public QWidget {
 			Update();
 			return;
 		}
-		OBSDataAutoRelease settings = obs_data_create();
-		obs_data_set_string(settings, "server", primary->server.toUtf8().constData());
-		obs_data_set_string(settings, "key", primary->key.toUtf8().constData());
-		obs_data_set_bool(settings, "cherries_multistream", true);
-		OBSServiceAutoRelease service =
-			obs_service_create("rtmp_custom", "Cherries primary", settings, nullptr);
+		OBSServiceAutoRelease service = CreateService(*primary, true);
 		if (!service) {
 			preparing = false;
 			Update();
@@ -390,7 +636,7 @@ class CherriesMultistream : public QWidget {
 		main->SetBroadcastFlowEnabled(false);
 		main->SetService(service);
 		primary->status = "Connecting";
-		startup.start(45000);
+		startup.start(primary->enhanced ? 120000 : 45000);
 		internalStart = true;
 		main->StartStreaming();
 		internalStart = false;
@@ -404,8 +650,7 @@ class CherriesMultistream : public QWidget {
 		OBSOutputAutoRelease source = obs_frontend_get_streaming_output();
 		obs_encoder_t *video = source ? obs_output_get_video_encoder(source) : nullptr;
 		obs_encoder_t *audio = source ? obs_output_get_audio_encoder(source, 0) : nullptr;
-		if (!video || !audio || strcmp(obs_encoder_get_codec(video), "h264") != 0 ||
-		    strcmp(obs_encoder_get_codec(audio), "aac") != 0) {
+		if (HasExtraSelected() && (!video || !audio || !CherriesCanShareOutput(source))) {
 			message->setText(
 				"Use H.264 video and AAC audio in Settings → Output for shared multistream encoding.");
 			main->ForceStopStreaming();
@@ -416,20 +661,19 @@ class CherriesMultistream : public QWidget {
 		for (auto &account : accounts) {
 			if (!account->selected || account.get() == primary)
 				continue;
-			OBSDataAutoRelease settings = obs_data_create();
-			obs_data_set_string(settings, "server", account->server.toUtf8().constData());
-			obs_data_set_string(settings, "key", account->key.toUtf8().constData());
-			account->service =
-				obs_service_create("rtmp_custom", account->id.toUtf8().constData(), settings, nullptr);
-			account->output =
-				obs_output_create("rtmp_output", account->id.toUtf8().constData(), nullptr, nullptr);
+			account->service = CreateService(*account, false);
+			const char *outputType = account->service ? GetStreamOutputType(account->service) : nullptr;
+			account->output = outputType ? obs_output_create(outputType, account->id.toUtf8().constData(),
+									 nullptr, nullptr)
+						     : nullptr;
 			if (!account->service || !account->output) {
 				account->status = "Could not create output";
 				continue;
 			}
 			// Video always shares the primary encoder. Audio is shared per selected OBS track.
-			auto trackEncoder = audioEncoders.Get(audioTemplate, account->audioTrack);
-			if (!trackEncoder || !CherriesShareEncoders(account->output, source, trackEncoder)) {
+			auto trackEncoder = audioEncoders.Get(audioTemplate, LiveTrack(*account));
+			if (!trackEncoder ||
+			    !CherriesShareEncoders(account->output, source, trackEncoder, VodEncoder(*account))) {
 				account->status = "Incompatible shared encoder";
 				continue;
 			}
@@ -438,7 +682,9 @@ class CherriesMultistream : public QWidget {
 			account->status = obs_output_start(account->output) ? "Connecting" : "Connection failed";
 		}
 		message->setText(
-			"All destinations share OBS's video encoder; audio encoders are shared by track. Sending does not confirm platform live status.");
+			primary->enhanced && main->outputHandler->multitrackVideoActive
+				? "Twitch Enhanced Broadcasting is active. Other destinations share a compatible H.264 rendition."
+				: "All destinations share OBS's video encoder; audio encoders are shared by track. Sending does not confirm platform live status.");
 		Update();
 	}
 
@@ -452,6 +698,13 @@ class CherriesMultistream : public QWidget {
 		else if (event == OBS_FRONTEND_EVENT_EXIT) {
 			self->StopExtra();
 			self->Restore();
+			self->shuttingDown = true;
+			self->monitor.stop();
+			self->validate.stop();
+			self->startup.stop();
+			// Release account docks and OBS outputs while the main window and libobs still exist.
+			self->main->auth.reset();
+			self->accounts.clear();
 		} else if (event == OBS_FRONTEND_EVENT_STREAMING_STOPPED && (self->running || self->preparing)) {
 			self->StopExtra();
 			self->Restore();
@@ -471,18 +724,25 @@ public:
 			return true;
 		audioEncoders.Clear();
 		audioTemplate = obs_encoder_get_ref(obs_output_get_audio_encoder(output, 0));
+		const bool enhancedActive = main->outputHandler->multitrackVideoActive;
+		if (enhancedActive) {
+			for (size_t i = 0; i < MAX_OUTPUT_AUDIO_ENCODERS; ++i)
+				audioEncoders.Seed(obs_output_get_audio_encoder(output, i));
+		}
 		for (const auto &account : accounts) {
-			if (account->selected && !audioEncoders.Get(audioTemplate, account->audioTrack)) {
+			if (enhancedActive && account.get() == primary)
+				continue;
+			if (account->selected && (!audioEncoders.Get(audioTemplate, LiveTrack(*account)) ||
+						  (VodTrack(*account) > 0 && !VodEncoder(*account)))) {
 				message->setText(
 					"Could not create the selected AAC audio track. Check Settings → Output.");
 				return false;
 			}
 		}
-		auto encoder = audioEncoders.Get(audioTemplate, primary->audioTrack);
-		if (!encoder)
-			return false;
-		obs_output_set_audio_encoder(output, encoder, 0);
-		return true;
+		if (enhancedActive)
+			return true; // Preserve all audio renditions assigned by Twitch's configuration.
+		auto encoder = audioEncoders.Get(audioTemplate, LiveTrack(*primary));
+		return CherriesSetAudioTracks(output, encoder, VodEncoder(*primary));
 	}
 	bool HasAccounts() const { return !accounts.empty(); }
 	bool HasSelected() const
@@ -507,6 +767,7 @@ public:
 	void Detach()
 	{
 		ImportNative();
+		EnsureDocks();
 		addons->setParent(this);
 		qobject_cast<QVBoxLayout *>(layout())->addWidget(addons);
 		hide();
@@ -543,6 +804,7 @@ public:
 		if (auto twitch = dynamic_cast<TwitchAuth *>(auth.get())) {
 			account->id = "twitch:" + QString::fromStdString(twitch->name);
 			account->label = "Twitch · " + QString::fromStdString(twitch->name);
+			account->enhanced = config_get_bool(main->Config(), "Stream1", "EnableMultitrackVideo");
 		} else if (auto youtube = dynamic_cast<YoutubeApiWrappers *>(auth.get())) {
 			for (const auto &a : accounts)
 				if (a->auth == auth)
@@ -556,6 +818,13 @@ public:
 			return;
 		for (auto &a : accounts)
 			if (a->id == account->id) {
+				if (auto native = std::dynamic_pointer_cast<TwitchAuth>(auth)) {
+					auto saved = std::dynamic_pointer_cast<TwitchAuth>(a->auth);
+					if (saved && native->browserProfile.empty()) {
+						native->browserProfile = saved->browserProfile;
+						native->browserCookies = saved->browserCookies;
+					}
+				}
 				a->auth = auth;
 				a->connected = true;
 				Save();
@@ -578,10 +847,12 @@ public:
 			this);
 		message->setWordWrap(true);
 		layout->addWidget(message);
-		table = new QTableWidget(0, 4, this);
-		table->setHorizontalHeaderLabels({"Use", "Account", "Connection", "Audio track"});
+		table = new QTableWidget(0, 6, this);
+		table->setHorizontalHeaderLabels(
+			{"Use", "Account", "Connection", "Live audio", "Twitch VOD", "Enhanced"});
 		table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
-		table->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
+		for (int column : {0, 2, 3, 4, 5})
+			table->horizontalHeader()->setSectionResizeMode(column, QHeaderView::ResizeToContents);
 		table->setEditTriggers(QAbstractItemView::NoEditTriggers);
 		table->setSelectionBehavior(QAbstractItemView::SelectRows);
 		table->setMaximumHeight(150);
@@ -616,6 +887,18 @@ public:
 			const int index = table->currentRow();
 			if (index >= 0 && index < int(accounts.size()) && !running && !preparing) {
 				table->setRowCount(0);
+				if (auto twitch = std::dynamic_pointer_cast<TwitchAuth>(accounts[index]->auth)) {
+					if (auto cookies = twitch->GetBrowserCookies()) {
+						cookies->DeleteCookies("", "");
+						cookies->FlushStore();
+					}
+				} else if (auto youtube =
+						   std::dynamic_pointer_cast<YoutubeAuth>(accounts[index]->auth)) {
+					if (youtube->browserCookies) {
+						youtube->browserCookies->DeleteCookies("", "");
+						youtube->browserCookies->FlushStore();
+					}
+				}
 				if (auto settings = qobject_cast<OBSBasicSettings *>(window())) {
 					auto native = std::dynamic_pointer_cast<OAuth>(settings->auth);
 					bool same = native == accounts[index]->auth;
@@ -679,6 +962,7 @@ public:
 						  : !obs_output_active(output)             ? "Disconnected"
 						  : obs_output_get_total_bytes(output) > 0 ? "Sending"
 											   : "Connecting";
+				ReportIngestion(*account, account->status == "Sending");
 			}
 			Update();
 		});
@@ -699,6 +983,8 @@ public:
 		});
 		validate.start();
 		Load();
+		ImportNative();
+		EnsureDocks();
 		Update();
 		obs_frontend_add_event_callback(Event, this);
 		hide();
@@ -706,7 +992,8 @@ public:
 
 	~CherriesMultistream() override
 	{
-		obs_frontend_remove_event_callback(Event, this);
+		if (!shuttingDown)
+			obs_frontend_remove_event_callback(Event, this);
 		for (auto &account : accounts)
 			if (account->output)
 				obs_output_force_stop(account->output);
@@ -753,6 +1040,7 @@ void CherriesMultistream::Manage(int tab)
 	if (preparing)
 		return;
 	ImportNative();
+	EnsureDocks();
 	Account *twitch = nullptr, *youtube = nullptr;
 	auto choose = [&](bool wantTwitch) -> Account * {
 		QStringList names;
@@ -781,22 +1069,31 @@ void CherriesMultistream::Manage(int tab)
 	window.setWindowTitle("Manage Broadcast");
 	window.resize(950, 800);
 	auto layout = new QVBoxLayout(&window);
-	QWidget *twitchPage;
-	if (twitch) {
+	auto twitchPage = new QWidget(&window);
+	auto twitchLayout = new QVBoxLayout(twitchPage);
+	twitchLayout->setContentsMargins(0, 0, 0, 0);
+	if (twitch && cef) {
 		auto auth = std::dynamic_pointer_cast<TwitchAuth>(twitch->auth);
-		twitchPage = CherriesCreateTwitchBroadcast(
-			&window, twitch->label, auth->clientId, [this, auth]() -> std::string {
-				if (!CherriesTwitchEnsureToken(auth->clientId, auth->token, auth->refresh_token,
-							       auth->expire_time))
-					return {};
-				Save();
-				return auth->token;
+		auto cookies = auth->GetBrowserCookies();
+		auto browser = cookies ? cef->create_widget(twitchPage,
+							    "https://dashboard.twitch.tv/popout/u/" + auth->name +
+								    "/stream-manager/edit-stream-info",
+							    cookies)
+				       : nullptr;
+		if (browser) {
+			browser->allowAllPopups(true);
+			twitchLayout->addWidget(browser, 1);
+			connect(&window, &QDialog::finished, &window, [browser, auth, cookies]() {
+				browser->closeBrowser();
+				cookies->FlushStore();
 			});
+		} else {
+			twitchLayout->addWidget(new QLabel(
+				"Could not open the Twitch browser session. Restart OBS and try again.", twitchPage));
+		}
 	} else {
-		twitchPage = new QWidget(&window);
-		auto body = new QVBoxLayout(twitchPage);
-		body->addWidget(new QLabel("Connect a Twitch account in Settings → Stream to edit its stream info.",
-					   twitchPage));
+		twitchLayout->addWidget(new QLabel(
+			"Connect a Twitch account in Settings → Stream to edit its stream info.", twitchPage));
 	}
 	if (youtube) {
 		OBSYoutubeActions editor(&window, youtube->auth.get(), false);
@@ -805,23 +1102,130 @@ void CherriesMultistream::Manage(int tab)
 		editor.findChild<QTabWidget *>("tabWidget")->setCurrentIndex(tab > 0 ? tab : 0);
 		layout->addWidget(&editor, 1);
 		connect(&editor, &OBSYoutubeActions::rejected, &window, &QDialog::reject);
-		connect(&editor, &OBSYoutubeActions::ok, &window,
-			[&, youtube](const std::string &broadcast, const std::string &, const std::string &key,
-				     bool autostart, bool, bool) {
-				if (!autostart) {
-					QMessageBox::warning(
-						&window, "YouTube broadcast",
-						"Enable automatic start for this broadcast before using it with shared multistream.");
+		auto actions = new QWidget(&window);
+		auto actionLayout = new QHBoxLayout(actions);
+		actionLayout->setContentsMargins(0, 0, 0, 0);
+		auto status = new QLabel(actions);
+		status->setTextFormat(Qt::PlainText);
+		status->setWordWrap(true);
+		auto refresh = new QPushButton("Refresh status", actions);
+		auto start = new QPushButton("Start YouTube broadcast", actions);
+		auto end = new QPushButton("End YouTube broadcast", actions);
+		actionLayout->addWidget(status, 1);
+		actionLayout->addWidget(refresh);
+		actionLayout->addWidget(start);
+		actionLayout->addWidget(end);
+		layout->addWidget(actions);
+		auto api = std::dynamic_pointer_cast<YoutubeApiWrappers>(youtube->auth);
+		bool requestRunning = false;
+		auto updateActions = [&]() {
+			editor.SetBroadcastLocked(running && youtube->selected);
+			actions->setVisible(editor.findChild<QTabWidget *>("tabWidget")->currentIndex() > 0 &&
+					    !youtube->broadcast.isEmpty());
+			bool available = !requestRunning && !editor.IsLoading();
+			refresh->setEnabled(available);
+			start->setEnabled(available && running && youtube->selected);
+			end->setEnabled(available && !youtube->broadcast.isEmpty());
+		};
+		auto request = [&](int action) {
+			if (requestRunning || editor.IsLoading() || youtube->broadcast.isEmpty())
+				return;
+			if (action == 2) {
+				const QString text =
+					youtube == primary && HasExtraSelected()
+						? "End this YouTube broadcast? Because it owns the primary output, OBS will also stop the other selected streams."
+						: "End this YouTube broadcast? An ended broadcast cannot be resumed.";
+				if (QMessageBox::question(&window, "End YouTube broadcast", text,
+							  QMessageBox::Yes | QMessageBox::No,
+							  QMessageBox::No) != QMessageBox::Yes)
 					return;
+			}
+			requestRunning = true;
+			updateActions();
+			QMessageBox waiting(&window);
+			waiting.setWindowTitle("YouTube broadcast");
+			waiting.setText("Contacting YouTube…");
+			waiting.setStandardButtons(QMessageBox::NoButton);
+			waiting.setWindowFlags(waiting.windowFlags() & ~Qt::WindowCloseButtonHint);
+			bool success = false;
+			QString result;
+			QScopedPointer<QThread> worker(CreateQThread([&]() {
+				json11::Json response;
+				if (action == 1) {
+					if (api->FindStream(youtube->streamId, response) &&
+					    response["items"][0]["status"]["streamStatus"].string_value() == "active")
+						success = api->StartBroadcast(youtube->broadcast);
+					else
+						result =
+							"YouTube is not receiving the stream yet. Start Streaming in Controls, then try again.";
+				} else if (action == 2) {
+					success = api->StopBroadcast(youtube->broadcast);
+				} else {
+					success = api->FindBroadcast(youtube->broadcast, response);
+					if (success)
+						result = "YouTube: " +
+							 QString::fromStdString(
+								 response["items"][0]["status"]["lifeCycleStatus"]
+									 .string_value());
 				}
+				if (!success && result.isEmpty()) {
+					result = api->GetLastError();
+					if (result.isEmpty())
+						result = "YouTube could not complete the request. Try again.";
+				}
+				QMetaObject::invokeMethod(&waiting, &QMessageBox::accept, Qt::QueuedConnection);
+			}));
+			worker->start();
+			waiting.exec();
+			worker->wait();
+			if (success && action == 1)
+				result = "YouTube broadcast start requested. Refresh status to confirm it is live.";
+			if (success && action == 2) {
+				result = "YouTube broadcast ended.";
+				if (youtube == primary && running)
+					main->StopStreaming();
+				else if (youtube->output)
+					obs_output_force_stop(youtube->output);
+				ReportIngestion(*youtube, false);
+				youtube->key.clear();
+				youtube->broadcast.clear();
+				youtube->status = "Broadcast ended";
+			}
+			status->setText(result);
+			requestRunning = false;
+			Save();
+			updateActions();
+		};
+		connect(refresh, &QPushButton::clicked, &window, [&]() { request(0); });
+		connect(start, &QPushButton::clicked, &window, [&]() { request(1); });
+		connect(end, &QPushButton::clicked, &window, [&]() { request(2); });
+		QTimer stateTimer;
+		stateTimer.setInterval(500);
+		connect(&stateTimer, &QTimer::timeout, &window, updateActions);
+		stateTimer.start();
+		connect(&editor, &OBSYoutubeActions::ok, &window,
+			[&, youtube](const std::string &broadcast, const std::string &stream, const std::string &key,
+				     bool autostart, bool autostop, bool) {
 				youtube->broadcast = QString::fromStdString(broadcast);
+				youtube->streamId = QString::fromStdString(stream);
+				youtube->autoStart = autostart;
+				youtube->autoStop = autostop;
 				youtube->server = "rtmps://a.rtmps.youtube.com/live2";
 				youtube->key = QString::fromStdString(key);
 				youtube->status = "Broadcast ready";
+				status->setText(
+					autostart
+						? "Starts automatically when YouTube receives your stream."
+						: "Start Streaming, then use Start YouTube broadcast when ready to go live.");
 				message->setText(
-					"YouTube broadcast ready. Use Start Streaming in Controls when you are ready to go live.");
+					"YouTube broadcast ready. Use Start Streaming in Controls when you are ready.");
+				Save();
 				Update();
+				updateActions();
 			});
+		status->setText(youtube->autoStart ? "Automatic broadcast start is enabled."
+						   : "Manual broadcast start is enabled.");
+		updateActions();
 		window.exec();
 	} else {
 		auto tabs = new QTabWidget(&window);

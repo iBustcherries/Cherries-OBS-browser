@@ -11,15 +11,21 @@ struct obs_encoder {
 struct obs_output {
 	obs_encoder_t *video = nullptr;
 	obs_encoder_t *audio = nullptr;
+	std::array<obs_encoder_t *, MAX_OUTPUT_AUDIO_ENCODERS> extra{};
+	obs_encoder_t *alternateVideo = nullptr;
 };
 
 extern "C" obs_encoder_t *obs_output_get_video_encoder(const obs_output_t *output)
 {
 	return output->video;
 }
-extern "C" obs_encoder_t *obs_output_get_audio_encoder(const obs_output_t *output, size_t)
+extern "C" obs_encoder_t *obs_output_get_video_encoder2(const obs_output_t *output, size_t idx)
 {
-	return output->audio;
+	return idx == 0 ? output->video : idx == 1 ? output->alternateVideo : nullptr;
+}
+extern "C" obs_encoder_t *obs_output_get_audio_encoder(const obs_output_t *output, size_t idx)
+{
+	return idx == 0 ? output->audio : output->extra.at(idx);
 }
 extern "C" const char *obs_encoder_get_codec(const obs_encoder_t *encoder)
 {
@@ -29,9 +35,12 @@ extern "C" void obs_output_set_video_encoder(obs_output_t *output, obs_encoder_t
 {
 	output->video = encoder;
 }
-extern "C" void obs_output_set_audio_encoder(obs_output_t *output, obs_encoder_t *encoder, size_t)
+extern "C" void obs_output_set_audio_encoder(obs_output_t *output, obs_encoder_t *encoder, size_t idx)
 {
-	output->audio = encoder;
+	if (idx == 0)
+		output->audio = encoder;
+	else
+		output->extra.at(idx) = encoder;
 }
 
 static int created = 0;
@@ -102,6 +111,10 @@ int main()
 	source.video = &av1;
 	assert(!CherriesShareEncoders(&third, &source));
 	assert(third.video == &video && third.audio == &audio);
+	// Enhanced Broadcasting may put AV1 first and an H.264 rendition after it.
+	source.alternateVideo = &video;
+	assert(CherriesShareEncoders(&third, &source) && third.video == &video);
+	source.alternateVideo = nullptr;
 	source.video = &video;
 	source.audio = nullptr;
 	assert(!CherriesShareEncoders(&third, &source));
@@ -118,6 +131,16 @@ int main()
 		assert(CherriesShareEncoders(&youtube, &source, tracks.Get(&audio, 0)));
 		assert(twitch.audio == primaryAudio && youtube.audio == &audio);
 		assert(twitch.video == &video && youtube.video == &video);
+		// A VOD mix may reuse another destination's live encoder, without a second video encode.
+		assert(CherriesShareEncoders(&twitch, &source, primaryAudio, tracks.Get(&audio, 2)));
+		assert(twitch.extra[1] == youtube.audio && twitch.video == youtube.video);
+		assert(youtube.extra[1] == nullptr);
+		assert(CherriesSetAudioTracks(&twitch, primaryAudio, primaryAudio));
+		assert(twitch.extra[1] == nullptr); // Identical mixes use normal Twitch archive audio.
+		assert(CherriesSetAudioTracks(&twitch, primaryAudio, &audio));
+		assert(CherriesShareEncoders(&twitch, &source, primaryAudio));
+		assert(twitch.extra[1] == nullptr); // Disable or switch platform: no stale VOD track.
+		assert(!CherriesSetAudioTracks(&twitch, primaryAudio, &av1));
 		assert(created == 1); // Every account on track 3 shares the same encoder.
 		auto sixth = tracks.Get(&audio, 6);
 		assert(sixth && sixth->mixer == 5 && tracks.Get(&audio, 6) == sixth && created == 2);
@@ -132,4 +155,15 @@ int main()
 		assert(tracks.Get(&audio, 2) == &audio); // Clean cache can be reused for a later stream.
 	}
 	assert(live == 0 && audio.references == 0);
+	// Enhanced Broadcasting's existing VOD encoder can also supply YouTube's live mix.
+	obs_encoder enhancedLive{"aac", 0}, enhancedVod{"aac", 1};
+	{
+		CherriesAudioEncoders tracks;
+		const int before = created;
+		tracks.Seed(&enhancedLive);
+		tracks.Seed(&enhancedVod);
+		tracks.Seed(&av1); // Non-AAC renditions cannot be shared with these destinations.
+		assert(tracks.Get(&enhancedLive, 2) == &enhancedVod && created == before);
+	}
+	assert(enhancedLive.references == 0 && enhancedVod.references == 0);
 }

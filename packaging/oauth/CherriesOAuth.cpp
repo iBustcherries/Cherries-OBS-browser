@@ -3,6 +3,7 @@
 #include "CherriesBundledClients.hpp"
 
 #include <widgets/OBSBasic.hpp>
+#include <browser-panel.hpp>
 #include <QDesktopServices>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -24,6 +25,7 @@
 #include <ctime>
 
 using namespace CherriesOAuthProtocol;
+extern QCef *cef;
 
 static std::string Setting(const char *key)
 {
@@ -147,16 +149,31 @@ bool CherriesTwitchEnsureToken(const std::string &client, std::string &token, st
 }
 
 bool CherriesTwitchLogin(QWidget *parent, const std::string &client, std::string &token, std::string &refresh,
-			 uint64_t &expiry)
+			 uint64_t &expiry, QCefCookieManager *cookies)
 {
 	if (client.empty())
 		return false;
+	if (!cef || !cookies) {
+		QMessageBox::warning(parent, "Connect Twitch",
+				     "The browser component is unavailable. Restart OBS and try again.");
+		return false;
+	}
 	QDialog dialog(parent);
 	dialog.setWindowTitle("Connect Twitch");
+	dialog.resize(800, 750);
 	auto layout = new QVBoxLayout(&dialog);
 	auto label = new QLabel("Requesting Twitch authorization…", &dialog);
 	label->setWordWrap(true);
 	layout->addWidget(label);
+	auto browser = cef->create_widget(&dialog, "about:blank", cookies);
+	if (!browser)
+		return false;
+	browser->allowAllPopups(true);
+	layout->addWidget(browser, 1);
+	QObject::connect(&dialog, &QDialog::finished, &dialog, [browser, cookies]() {
+		browser->closeBrowser();
+		cookies->FlushStore();
+	});
 	auto open = new QPushButton("Open Twitch authorization", &dialog);
 	open->setEnabled(false);
 	layout->addWidget(open);
@@ -207,11 +224,12 @@ bool CherriesTwitchLogin(QWidget *parent, const std::string &client, std::string
 					return;
 				}
 				interval = qBound(5, json.value("interval").toInt(5), 60);
-				label->setText("Authorize Cherries OBS in your browser. Your code is: " + code);
+				label->setText("Sign in to Twitch below and authorize Cherries OBS. Your code is: " +
+					       code);
 				open->setEnabled(true);
 				deadline.start(seconds * 1000);
 				poll.start(interval * 1000);
-				QDesktopServices::openUrl(verification);
+				browser->setURL(verification.toString(QUrl::FullyEncoded).toStdString());
 			} else if (!initial && status == 200 &&
 				   ApplyToken(json, token, refresh, expiry, time(nullptr), true)) {
 				success = true;
@@ -232,7 +250,8 @@ bool CherriesTwitchLogin(QWidget *parent, const std::string &client, std::string
 			}
 		});
 	};
-	QObject::connect(open, &QPushButton::clicked, &dialog, [&]() { QDesktopServices::openUrl(verification); });
+	QObject::connect(open, &QPushButton::clicked, &dialog,
+			 [&]() { browser->setURL(verification.toString(QUrl::FullyEncoded).toStdString()); });
 	QObject::connect(&poll, &QTimer::timeout, &dialog, [&]() { send(false); });
 	QObject::connect(&deadline, &QTimer::timeout, &dialog, [&]() {
 		poll.stop();
