@@ -25,12 +25,22 @@ done
 wireplumber > "$XDG_RUNTIME_DIR/wireplumber.log" 2>&1 &
 manager=$!
 player=''
+display_server=''
 cleanup() {
     if [ -n "$player" ]; then kill "$player" 2>/dev/null || true; fi
     kill "$manager" "$server" 2>/dev/null || true
+    if [ -n "$display_server" ]; then kill "$display_server" 2>/dev/null || true; fi
     rm -rf "$XDG_RUNTIME_DIR"
 }
 trap cleanup EXIT
+# libobs initializes its Linux display backend even for this audio-only test.
+export DISPLAY=:99
+Xvfb "$DISPLAY" -screen 0 1280x720x24 -nolisten tcp > "$XDG_RUNTIME_DIR/display.log" 2>&1 &
+display_server=$!
+for attempt in {1..30}; do
+    if [ -S /tmp/.X11-unix/X99 ]; then break; fi
+    sleep 0.2
+done
 ready=false
 for attempt in {1..30}; do
     if pw-metadata -n default 0 default.audio.sink '{"name":"cherries-test-sink"}' >/dev/null 2>&1; then
@@ -56,6 +66,6 @@ PY
 pw-cat --playback --target=cherries-test-sink --rate=48000 --channels=2 --format=f32 - < "$XDG_RUNTIME_DIR/unrelated.raw" > "$XDG_RUNTIME_DIR/player.log" 2>&1 &
 player=$!
 if ! ./game-audio-stream-test "$XDG_RUNTIME_DIR/game.raw" "$player"; then
-    cat "$XDG_RUNTIME_DIR/pipewire.log" "$XDG_RUNTIME_DIR/wireplumber.log" "$XDG_RUNTIME_DIR/player.log"
+    cat "$XDG_RUNTIME_DIR/pipewire.log" "$XDG_RUNTIME_DIR/wireplumber.log" "$XDG_RUNTIME_DIR/player.log" "$XDG_RUNTIME_DIR/display.log"
     exit 1
 fi

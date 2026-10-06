@@ -41,7 +41,7 @@ jobs:
             alsa-lib-devel libv4l-devel libva-devel libdrm-devel systemd-devel \
             pciutils-devel uthash-devel simde-devel nlohmann-json-devel \
             websocketpp-devel asio-devel libqrcodegencpp-devel mbedtls-devel \
-            libuuid-devel zlib-devel python3-devel speexdsp-devel x264-devel libvpl-devel fontconfig-devel freetype-devel nv-codec-headers vulkan-loader-devel vulkan-headers zenity pipewire pipewire-utils wireplumber dbus-daemon
+            libuuid-devel zlib-devel python3-devel speexdsp-devel x264-devel libvpl-devel fontconfig-devel freetype-devel nv-codec-headers vulkan-loader-devel vulkan-headers zenity pipewire pipewire-utils wireplumber dbus-daemon xorg-x11-server-Xvfb
           dnf install -y glibc-devel.i686 libgcc.i686 libatomic.i686 vulkan-loader-devel.i686 mesa-libGL-devel.i686
       - name: Check out browser changes
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -178,6 +178,12 @@ jobs:
           nm -D /opt/cherries-obs/lib/obs_glcapture/libobs_glcapture.so | grep -q ' T eglSwapBuffers'
           cherries-gamecapture /usr/bin/true 2> gamecapture-preload.txt
           if grep -E 'cannot be preloaded|symbol lookup error' gamecapture-preload.txt; then exit 1; fi
+      - name: Upload experimental Fedora RPM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: cherries-obs-wayland-fedora44-x86_64
+          path: rpmbuild/RPMS/x86_64/*.rpm
+          retention-days: 14
       - name: Verify game audio isolation, switching and stop
         shell: bash
         run: |
@@ -190,9 +196,3 @@ jobs:
             -L/opt/cherries-obs/lib64 -Wl,-rpath,/opt/cherries-obs/lib64 -lobs -lm -lpthread \
             -o game-audio-stream-test
           dbus-run-session -- bash browser-fork/tests/game-audio-stream.sh
-      - name: Upload experimental Fedora RPM
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: cherries-obs-wayland-fedora44-x86_64
-          path: rpmbuild/RPMS/x86_64/*.rpm
-          retention-days: 14
