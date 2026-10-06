@@ -1,6 +1,6 @@
 # Linux Game Capture
 
-Release 14 bundles obs-vkcapture 1.5.6 at
+The package bundles obs-vkcapture 1.5.6 at
 8a2c43295fae2ede8ffd382a1581281ceb6153c0 with the OBS source plugin and both
 64-bit and 32-bit Vulkan/OpenGL hooks. Add Sources > Game Capture and leave
 Window set to Automatic (latest compatible game). The newest hooked game is
@@ -21,6 +21,20 @@ The launcher preserves existing preload and Vulkan layer configuration,
 adds the Cherries manifests and exposes /opt/cherries-obs to Steam's runtime.
 Architecture-specific manifests and loader-token aliases support native and
 Steam runtime library directory layouts.
+
+Release 16 automatically handles the native Steam version of Dead Cells
+(Steam app 588650). Its supplied `deadcells.sh` clears `LD_PRELOAD` before
+starting the rendering process. When Cherries capture is enabled, the OpenGL
+hook restores its own preload for that final `deadcells` process. The
+`detect.hl` renderer detection step keeps the game's normal environment.
+The original game scripts and binaries are never edited, and other games and
+launches without Cherries capture enabled are unchanged. This applies to both
+the Cherries Steam launcher and `cherries-gamecapture %command%`; restarting
+the game is necessary after enabling capture. If a previous manual edit was
+made, restore the saved original `deadcells.sh` before testing this behavior.
+Tests reproduce the game's two-step shell launcher, check exec/spawn paths,
+and verify preload/argument preservation and an unchanged script checksum.
+Actual Dead Cells graphics and audio must also be verified on the user's machine.
 
 Automatic selection means selection among games that have connected to the
 capture hooks. It is not universal capture of every process on Linux. Vulkan

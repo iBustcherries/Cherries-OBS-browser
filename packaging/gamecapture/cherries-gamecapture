@@ -6,6 +6,7 @@ fi
 # Leave the loader's architecture token literal for both 32- and 64-bit games.
 capture_library='/opt/cherries-obs/$LIB/obs_glcapture/libobs_glcapture.so'
 export LD_PRELOAD="${LD_PRELOAD}${LD_PRELOAD:+:}${capture_library}"
+export CHERRIES_GAMECAPTURE_ACTIVE=1
 export OBS_VKCAPTURE=1
 export VK_ADD_IMPLICIT_LAYER_PATH="/opt/cherries-obs/share/vulkan/implicit_layer.d${VK_ADD_IMPLICIT_LAYER_PATH:+:${VK_ADD_IMPLICIT_LAYER_PATH}}"
 export XDG_DATA_DIRS="/opt/cherries-obs/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"

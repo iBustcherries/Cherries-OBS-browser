@@ -83,6 +83,7 @@ jobs:
           cp browser-fork/packaging/youtube/* obs/frontend/oauth/
           git -C obs/plugins/cherries-gamecapture apply "$GITHUB_WORKSPACE/browser-fork/packaging/obs-vkcapture-integration.patch"
           cp browser-fork/packaging/gamecapture/*.h obs/plugins/cherries-gamecapture/src/
+          cp browser-fork/packaging/gamecapture/CherriesGameLaunch.c obs/plugins/cherries-gamecapture/src/
           git -C obs/plugins/cherries-gameaudio apply "$GITHUB_WORKSPACE/browser-fork/packaging/obs-gameaudio-integration.patch"
           cp browser-fork/packaging/gamecapture/CherriesGameAudio.h browser-fork/packaging/gamecapture/CherriesAudioTarget.h obs/plugins/cherries-gameaudio/src/
           printf '%s\n' 'add_subdirectory(cherries-gamecapture)' 'target_enable(linux-vkcapture)' 'set_obs_core_modules()' >> obs/plugins/CMakeLists.txt
@@ -121,6 +122,7 @@ jobs:
           ./game-audio-target-test
           sh -n browser-fork/packaging/gamecapture/cherries-gamecapture
           sh -n browser-fork/packaging/gamecapture/cherries-steam
+          bash browser-fork/tests/game-launch.sh
       - name: Configure and build Fedora binaries
         shell: bash
         run: |
@@ -177,8 +179,11 @@ jobs:
           nm -D /opt/cherries-obs/lib/libVkLayer_obs_vkcapture.so | grep -q ' T OBS_Negotiate'
           nm -D /opt/cherries-obs/lib64/obs_glcapture/libobs_glcapture.so | grep -q ' T eglSwapBuffers'
           nm -D /opt/cherries-obs/lib/obs_glcapture/libobs_glcapture.so | grep -q ' T eglSwapBuffers'
+          nm -D /opt/cherries-obs/lib64/obs_glcapture/libobs_glcapture.so | grep -q ' T execve'
+          nm -D /opt/cherries-obs/lib/obs_glcapture/libobs_glcapture.so | grep -q ' T execve'
           cherries-gamecapture /usr/bin/true 2> gamecapture-preload.txt
           if grep -E 'cannot be preloaded|symbol lookup error' gamecapture-preload.txt; then exit 1; fi
+          bash browser-fork/tests/game-launch.sh /opt/cherries-obs/lib64/obs_glcapture/libobs_glcapture.so
       - name: Verify Game Capture source registration
         shell: bash
         run: |
