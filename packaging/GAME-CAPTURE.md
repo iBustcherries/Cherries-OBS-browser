@@ -8,7 +8,51 @@ selected; when it exits, capture falls back to the remaining matching game.
 Common launcher processes are excluded in automatic mode. The executable
 selector remains available for explicit selection, including launcher UI.
 
-For native Steam, quit Steam completely, then launch **Cherries Steam (Game
+Release 17 adds **Tools > Game Capture Setup** inside OBS. For normal Steam
+use, quit Steam once and select **Enable automatic capture through normal
+Steam**. Open your usual Steam shortcut again. Compatible future Vulkan and
+OpenGL games inherit the hooks and connect automatically to an active Game
+Capture source, including its process-matched audio. No per-game launch-option
+setup or separate launcher is required in this mode. The per-user override keeps
+Steam's desktop ID, name, icon and URI actions. Existing Steam autostart is
+updated if present; none is created. Disable restores the original shortcuts.
+Steam started directly through a terminal or another launcher does not use this
+desktop override. Capture still requires compatible games and the host hooks to
+be accepted by their runtime; there is no remote injection into games already
+running. Unknown launcher scripts that strip hooks may need future compatibility
+profiles like Dead Cells'.
+
+As an independent option, enable automatic
+Vulkan capture once to launch compatible Vulkan/Proton games normally, without
+Steam launch options or a special launcher. This installs per-user implicit
+layer manifests and architecture-specific hook copies in the user's data
+folder; the copies remain visible inside native Steam's runtime. Disable the
+checkbox to remove those manifests. Unrelated non-Steam Vulkan programs are
+not connected unless capture was explicitly requested. Restart already-running games after
+changing the setting. OBS refreshes these owned copies after package upgrades.
+
+As an optional per-game alternative, choose the Steam account and click **Enable capture** beside
+the game. Quit Steam completely before applying changes. Installed games are
+read from Steam's library list, including additional mounted drives and paths
+with spaces; use **Refresh games** after installing games or mounting a drive.
+Setup modifies only that game's launch option, preserves environment variables,
+wrappers and arguments, saves the original option and a private configuration
+backup, and lets **Disable capture** restore the original value. It refuses to
+overwrite Steam settings while Steam is running, malformed/ambiguous files,
+unsupported command syntax, or options edited externally after setup. Existing
+manually enabled capture options are recognized and left untouched.
+
+The native Dead Cells profile is offered when its Linux launcher is installed;
+it does not change the game's Proton selection. Unknown games remain **Not
+checked**. **Configured** means a launch option was saved, not that capture was
+tested. **Capturing now** requires an active Game Capture source with a valid
+imported video texture and a matching Steam app ID from the game's process.
+After capture ends, the history is labeled **Captured before**. This setup
+currently supports native/RPM Steam; Flatpak Steam requires its own runtime
+integration. Games without readable Steam process metadata may capture without
+appearing in the learned history.
+
+The older launcher remains available as an alternative. For native Steam, quit Steam completely, then launch **Cherries Steam (Game
 Capture)** from your application menu. Games started by that Steam process
 inherit the capture hooks without per-game launch options. Existing Steam
 processes cannot acquire environment changes retroactively, so the launcher

@@ -41,7 +41,7 @@ jobs:
             alsa-lib-devel libv4l-devel libva-devel libdrm-devel systemd-devel \
             pciutils-devel uthash-devel simde-devel nlohmann-json-devel \
             websocketpp-devel asio-devel libqrcodegencpp-devel mbedtls-devel \
-            libuuid-devel zlib-devel python3-devel speexdsp-devel x264-devel libvpl-devel fontconfig-devel freetype-devel nv-codec-headers vulkan-loader-devel vulkan-headers zenity pipewire pipewire-utils wireplumber dbus-daemon xorg-x11-server-Xvfb
+            libuuid-devel zlib-devel python3-devel speexdsp-devel x264-devel libvpl-devel fontconfig-devel freetype-devel nv-codec-headers vulkan-loader-devel vulkan-headers mesa-vulkan-drivers zenity pipewire pipewire-utils wireplumber dbus-daemon xorg-x11-server-Xvfb
           dnf install -y glibc-devel.i686 libgcc.i686 libatomic.i686 vulkan-loader-devel.i686 mesa-libGL-devel.i686
       - name: Check out browser changes
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -81,6 +81,8 @@ jobs:
           cp browser-fork/packaging/twitch/* obs/frontend/oauth/
           git -C obs apply ../browser-fork/packaging/obs-youtube-integration.patch
           cp browser-fork/packaging/youtube/* obs/frontend/oauth/
+          git -C obs apply ../browser-fork/packaging/obs-capture-setup-integration.patch
+          cp browser-fork/packaging/gamecapture/CherriesCaptureSetup.* browser-fork/packaging/gamecapture/CherriesSteam*.hpp obs/frontend/dialogs/
           git -C obs/plugins/cherries-gamecapture apply "$GITHUB_WORKSPACE/browser-fork/packaging/obs-vkcapture-integration.patch"
           cp browser-fork/packaging/gamecapture/*.h obs/plugins/cherries-gamecapture/src/
           cp browser-fork/packaging/gamecapture/CherriesGameLaunch.c obs/plugins/cherries-gamecapture/src/
@@ -123,6 +125,14 @@ jobs:
           sh -n browser-fork/packaging/gamecapture/cherries-gamecapture
           sh -n browser-fork/packaging/gamecapture/cherries-steam
           bash browser-fork/tests/game-launch.sh
+      - name: Check reversible Steam capture setup
+        shell: bash
+        run: |
+          g++ -std=c++20 -fPIC -Ibrowser-fork browser-fork/tests/steam-capture-setup.cpp \
+            $(pkg-config --cflags --libs Qt6Core) -o steam-capture-setup-test
+          ./steam-capture-setup-test
+          gcc -Ibrowser-fork browser-fork/tests/capture-eligibility.c -o capture-eligibility-test
+          ./capture-eligibility-test
       - name: Configure and build Fedora binaries
         shell: bash
         run: |
@@ -184,6 +194,17 @@ jobs:
           cherries-gamecapture /usr/bin/true 2> gamecapture-preload.txt
           if grep -E 'cannot be preloaded|symbol lookup error' gamecapture-preload.txt; then exit 1; fi
           bash browser-fork/tests/game-launch.sh /opt/cherries-obs/lib64/obs_glcapture/libobs_glcapture.so
+      - name: Verify automatic Vulkan layer loading
+        shell: bash
+        run: |
+          mkdir -p capture-home/share
+          ./steam-capture-setup-test --installed-vulkan "$GITHUB_WORKSPACE/capture-home/share"
+          gcc browser-fork/tests/vulkan-auto-layer.c -lvulkan -o vulkan-auto-layer-test
+          env -u OBS_VKCAPTURE -u VK_ADD_IMPLICIT_LAYER_PATH -u VK_IMPLICIT_LAYER_PATH \
+            XDG_DATA_HOME="$GITHUB_WORKSPACE/capture-home/share" VK_LOADER_DEBUG=layer \
+            ./vulkan-auto-layer-test > automatic-vulkan.log 2>&1
+          cat automatic-vulkan.log
+          grep -E 'Insert instance layer.*VK_LAYER_CHERRIES_vkcapture_64' automatic-vulkan.log
       - name: Verify Game Capture source registration
         shell: bash
         run: |

@@ -4,7 +4,7 @@
 
 Name: cherries-obs-wayland
 Version: 0.1
-Release: 16.experimental%{?dist}
+Release: 17.experimental%{?dist}
 Summary: Experimental OBS build with Wayland browser docks
 License: GPL-2.0-or-later AND BSD-3-Clause
 URL: https://github.com/iBustcherries/Cherries-OBS-browser
@@ -45,6 +45,7 @@ cat > %{buildroot}/usr/bin/cherries-obs-wayland <<'EOF'
 #!/bin/sh
 umask 077
 export QT_QPA_PLATFORM=wayland
+export CHERRIES_HOST_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}/cherries-obs-experimental"
 exec /opt/cherries-obs/bin/obs "$@"
 EOF

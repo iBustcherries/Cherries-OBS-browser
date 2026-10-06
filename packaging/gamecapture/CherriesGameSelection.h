@@ -11,6 +11,8 @@ static inline int cherries_is_game_candidate(const char *exe)
 				   "steam.exe",
 				   "obs",
 				   "obs-studio",
+				   "obs-browser-page",
+				   "gameoverlayui",
 				   "pressure-vessel-wrap",
 				   "lutris",
 				   "heroic",
