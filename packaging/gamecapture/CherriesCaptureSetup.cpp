@@ -45,6 +45,8 @@ QString steamIdForPid(qint64 pid)
 void observeCaptures()
 {
 	currentCaptures.clear();
+	if (!obs_initialized())
+		return;
 	obs_enum_sources(
 		[](void *, obs_source_t *source) {
 			if (strcmp(obs_source_get_id(source), "vkcapture-source") != 0)
