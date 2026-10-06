@@ -3,7 +3,6 @@
 #include <obs-module.h>
 #include <pipewire/pipewire.h>
 #include <math.h>
-#include <fcntl.h>
 #include <pthread.h>
 #include <signal.h>
 #include <unistd.h>
@@ -86,12 +85,7 @@ int main(int argc, char **argv)
 	obs_source_add_audio_capture_callback(source, received, NULL);
 	pid_t game = fork();
 	if (game == 0) {
-		int input = open(argv[1], O_RDONLY);
-		if (input < 0 || dup2(input, STDIN_FILENO) < 0)
-			_exit(126);
-		close(input);
-		execlp("pw-cat", "pw-cat", "--playback", "--target=cherries-test-sink", "--rate=48000", "--channels=2",
-		       "--format=f32", "-", (char *)NULL);
+		execlp("pw-cat", "pw-cat", "--playback", "--target=cherries-test-sink", argv[1], (char *)NULL);
 		_exit(127);
 	}
 	if (game < 0)

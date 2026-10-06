@@ -54,18 +54,22 @@ if [ "$ready" != true ]; then
     exit 1
 fi
 python3 - "$XDG_RUNTIME_DIR" <<'PY'
-import array, math, pathlib, sys
+import array, math, pathlib, sys, wave
 root = pathlib.Path(sys.argv[1])
 for name, amplitude, frequency in [('game', .2, 440), ('unrelated', .6, 880)]:
-    samples = array.array('f')
+    samples = array.array('h')
     for i in range(48000 * 30):
         sample = amplitude * math.sin(2 * math.pi * frequency * i / 48000)
-        samples.extend([sample, sample])
-    (root / (name + '.raw')).write_bytes(samples.tobytes())
+        samples.extend([round(sample * 32767), round(sample * 32767)])
+    with wave.open(str(root / (name + '.wav')), 'wb') as output:
+        output.setnchannels(2)
+        output.setsampwidth(2)
+        output.setframerate(48000)
+        output.writeframes(samples.tobytes())
 PY
-pw-cat --playback --target=cherries-test-sink --rate=48000 --channels=2 --format=f32 - < "$XDG_RUNTIME_DIR/unrelated.raw" > "$XDG_RUNTIME_DIR/player.log" 2>&1 &
+pw-cat --playback --target=cherries-test-sink "$XDG_RUNTIME_DIR/unrelated.wav" > "$XDG_RUNTIME_DIR/player.log" 2>&1 &
 player=$!
-if ! ./game-audio-stream-test "$XDG_RUNTIME_DIR/game.raw" "$player"; then
+if ! ./game-audio-stream-test "$XDG_RUNTIME_DIR/game.wav" "$player"; then
     cat "$XDG_RUNTIME_DIR/pipewire.log" "$XDG_RUNTIME_DIR/wireplumber.log" "$XDG_RUNTIME_DIR/player.log" "$XDG_RUNTIME_DIR/display.log"
     exit 1
 fi

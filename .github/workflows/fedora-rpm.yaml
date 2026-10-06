@@ -85,7 +85,7 @@ jobs:
           cp browser-fork/packaging/gamecapture/*.h obs/plugins/cherries-gamecapture/src/
           git -C obs/plugins/cherries-gameaudio apply "$GITHUB_WORKSPACE/browser-fork/packaging/obs-gameaudio-integration.patch"
           cp browser-fork/packaging/gamecapture/CherriesGameAudio.h browser-fork/packaging/gamecapture/CherriesAudioTarget.h obs/plugins/cherries-gameaudio/src/
-          echo 'add_subdirectory(cherries-gamecapture)' >> obs/plugins/CMakeLists.txt
+          printf '%s\n' 'add_subdirectory(cherries-gamecapture)' 'target_enable(linux-vkcapture)' 'set_obs_core_modules()' >> obs/plugins/CMakeLists.txt
           python3 browser-fork/packaging/configure-twitch-client.py obs/frontend/oauth/CherriesTwitchClient.hpp
           mkdir -p obs/.deps/cef
           curl -fL -o obs/.deps/cef.tar.xz https://cdn-fastly.obsproject.com/downloads/cef_binary_7871_linux_x86_64.tar.xz
@@ -132,6 +132,7 @@ jobs:
             -DCEF_ROOT_DIR="$GITHUB_WORKSPACE/obs/.deps/cef" \
             -DENABLE_AJA=OFF -DENABLE_VLC=OFF -DENABLE_WEBRTC=OFF \
             -DENABLE_VST=OFF -DENABLE_SCRIPTING=OFF -DENABLE_NEW_MPEGTS_OUTPUT=OFF
+          grep -Fq '"linux-vkcapture"' obs/build-fedora/libobs/obs-core-modules.c
           cmake --build obs/build-fedora --parallel 2
           DESTDIR="$GITHUB_WORKSPACE/stage" cmake --install obs/build-fedora
           cp obs/.deps/cef/LICENSE.txt stage/opt/cherries-obs/CEF-LICENSE.txt
@@ -178,6 +179,17 @@ jobs:
           nm -D /opt/cherries-obs/lib/obs_glcapture/libobs_glcapture.so | grep -q ' T eglSwapBuffers'
           cherries-gamecapture /usr/bin/true 2> gamecapture-preload.txt
           if grep -E 'cannot be preloaded|symbol lookup error' gamecapture-preload.txt; then exit 1; fi
+      - name: Verify Game Capture source registration
+        shell: bash
+        run: |
+          gcc -std=gnu11 -Iobs/libobs -Iobs/build-fedora/config \
+            browser-fork/tests/game-source-registration.c \
+            -L/opt/cherries-obs/lib64 -Wl,-rpath,/opt/cherries-obs/lib64 -lobs -lX11 \
+            -o /opt/cherries-obs/bin/cherries-source-test
+          Xvfb :98 -screen 0 1280x720x24 -nolisten tcp > source-display.log 2>&1 &
+          display_server=$!
+          trap 'kill "$display_server" 2>/dev/null || true' EXIT
+          DISPLAY=:98 /opt/cherries-obs/bin/cherries-source-test
       - name: Upload experimental Fedora RPM
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
