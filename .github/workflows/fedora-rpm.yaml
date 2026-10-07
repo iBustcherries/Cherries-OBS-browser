@@ -41,7 +41,7 @@ jobs:
             alsa-lib-devel libv4l-devel libva-devel libdrm-devel systemd-devel \
             pciutils-devel uthash-devel simde-devel nlohmann-json-devel pulseaudio-utils pipewire-pulseaudio \
             websocketpp-devel asio-devel libqrcodegencpp-devel mbedtls-devel \
-            libuuid-devel zlib-devel python3-devel speexdsp-devel x264-devel libvpl-devel fontconfig-devel freetype-devel nv-codec-headers vulkan-loader-devel vulkan-headers mesa-vulkan-drivers zenity pipewire pipewire-utils wireplumber dbus-daemon xorg-x11-server-Xvfb
+            libuuid-devel zlib-devel python3-devel speexdsp-devel x264-devel libvpl-devel fontconfig-devel freetype-devel nv-codec-headers vulkan-loader-devel vulkan-headers mesa-vulkan-drivers zenity pipewire pipewire-utils wireplumber dbus-daemon xorg-x11-server-Xvfb qt6-qtwayland mesa-dri-drivers ffmpeg-free
           dnf install -y glibc-devel.i686 libgcc.i686 libatomic.i686 vulkan-loader-devel.i686 mesa-libGL-devel.i686
       - name: Check out browser changes
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -71,6 +71,20 @@ jobs:
           ref: 6120aa622792908e4529b0e171b2acce5efb3f18
           path: obs/plugins/cherries-gameaudio
           persist-credentials: false
+      - name: Check out pinned canvas engine
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: Aitum/obs-vertical-canvas
+          ref: 106a55398d2cfa7aa039b02424c6a8d8619b6966
+          path: obs/plugins/vertical-canvas
+          persist-credentials: false
+      - name: Check out pinned multistream engine
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: Aitum/obs-aitum-multistream
+          ref: c48b4bf182f8b354255df7329c9afe3dee4f9820
+          path: obs/plugins/aitum-multistream
+          persist-credentials: false
       - name: Integrate fork and download verified CEF
         env:
           CHERRIES_TWITCH_CLIENT_ID: ${{ vars.CHERRIES_TWITCH_CLIENT_ID }}
@@ -90,6 +104,7 @@ jobs:
           cp browser-fork/packaging/gamecapture/CherriesGameAudio.h browser-fork/packaging/gamecapture/CherriesAudioTarget.h obs/plugins/cherries-gameaudio/src/
           printf '%s\n' 'add_subdirectory(cherries-gamecapture)' 'target_enable(linux-vkcapture)' 'set_obs_core_modules()' >> obs/plugins/CMakeLists.txt
           python3 browser-fork/packaging/configure-twitch-client.py obs/frontend/oauth/CherriesTwitchClient.hpp
+          python3 browser-fork/packaging/studio/integrate.py obs
           mkdir -p obs/.deps/cef
           curl -fL -o obs/.deps/cef.tar.xz https://cdn-fastly.obsproject.com/downloads/cef_binary_7871_linux_x86_64.tar.xz
           echo '8ffc64d06ea74da613eeda7f2aa5d4e98661af6fa3ed8c68724c9a6e4e89ea8e  obs/.deps/cef.tar.xz' | sha256sum -c -
@@ -148,6 +163,10 @@ jobs:
           cmake --build obs/build-fedora --parallel 2
           DESTDIR="$GITHUB_WORKSPACE/stage" cmake --install obs/build-fedora
           cp obs/.deps/cef/LICENSE.txt stage/opt/cherries-obs/CEF-LICENSE.txt
+          mkdir -p stage/opt/cherries-obs/share/licenses/cherries-studio
+          cp obs/plugins/vertical-canvas/LICENSE stage/opt/cherries-obs/share/licenses/cherries-studio/vertical-LICENSE
+          cp obs/plugins/aitum-multistream/LICENSE stage/opt/cherries-obs/share/licenses/cherries-studio/multistream-LICENSE
+          cp browser-fork/packaging/STUDIO.md stage/opt/cherries-obs/share/licenses/cherries-studio/README.md
       - name: Build 32-bit game capture hooks
         shell: bash
         run: |
@@ -259,3 +278,21 @@ jobs:
             -o game-audio-stream-legacy-test
           dbus-run-session -- bash browser-fork/tests/game-audio-stream.sh pulse ./game-audio-stream-legacy-test legacy-failure
           dbus-run-session -- bash browser-fork/tests/game-audio-stream.sh pulse
+
+      - name: Verify Studio workspace and live multistream routing
+        shell: bash
+        run: |
+          mkdir -p studio-test-plugins studio-results
+          g++ -std=c++17 -fPIC -shared browser-fork/tests/studio-smoke.cpp \
+            -Iobs/libobs -Iobs/build-fedora/config -Iobs/frontend/api \
+            $(pkg-config --cflags --libs Qt6Widgets) \
+            -L/opt/cherries-obs/lib64 -Wl,-rpath,/opt/cherries-obs/lib64 \
+            -lobs -lobs-frontend-api -o studio-test-plugins/studio-smoke.so
+          dbus-run-session -- bash browser-fork/tests/studio-smoke.sh studio-results
+      - name: Upload Studio verification evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: cherries-studio-verification
+          path: studio-results/
+          retention-days: 14

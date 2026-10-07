@@ -1,0 +1,5 @@
+add_library(cherries-studio MODULE CherriesStudio.cpp)
+target_link_libraries(cherries-studio PRIVATE OBS::libobs OBS::frontend-api Qt::Widgets)
+target_compile_features(cherries-studio PRIVATE cxx_std_17)
+set_target_properties_obs(cherries-studio PROPERTIES PREFIX "" AUTOMOC ON FOLDER plugins/cherries-studio)
+target_enable(cherries-studio)
