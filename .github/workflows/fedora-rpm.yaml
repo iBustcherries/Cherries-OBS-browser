@@ -39,7 +39,7 @@ jobs:
             libXext-devel libxcb-devel libxkbcommon-devel pipewire-devel \
             wayland-devel mesa-libEGL-devel mesa-libGL-devel pulseaudio-libs-devel \
             alsa-lib-devel libv4l-devel libva-devel libdrm-devel systemd-devel \
-            pciutils-devel uthash-devel simde-devel nlohmann-json-devel \
+            pciutils-devel uthash-devel simde-devel nlohmann-json-devel pulseaudio-utils pipewire-pulseaudio \
             websocketpp-devel asio-devel libqrcodegencpp-devel mbedtls-devel \
             libuuid-devel zlib-devel python3-devel speexdsp-devel x264-devel libvpl-devel fontconfig-devel freetype-devel nv-codec-headers vulkan-loader-devel vulkan-headers mesa-vulkan-drivers zenity pipewire pipewire-utils wireplumber dbus-daemon xorg-x11-server-Xvfb
           dnf install -y glibc-devel.i686 libgcc.i686 libatomic.i686 vulkan-loader-devel.i686 mesa-libGL-devel.i686
@@ -236,3 +236,26 @@ jobs:
             -L/opt/cherries-obs/lib64 -Wl,-rpath,/opt/cherries-obs/lib64 -lobs -lm -lpthread \
             -o game-audio-stream-test
           dbus-run-session -- bash browser-fork/tests/game-audio-stream.sh
+      - name: Verify PulseAudio game routing and bridge PID regression
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          source = Path('obs/plugins/cherries-gameaudio/src/pipewire-audio-capture-app.c').read_text()
+          resolver = 'cherries_audio_client_process(spa_dict_lookup(info->props, PW_KEY_CLIENT_API),'
+          assert source.count(resolver) == 1
+          # Recreate the old choice of the bridge's security PID to prove the
+          # Pulse test detects the reported silent-game failure.
+          source = source.replace(resolver, 'cherries_audio_client_process(NULL,')
+          Path('legacy-pulse-audio-capture-app.c').write_text(source)
+          PY
+          gcc -std=gnu11 -Ibrowser-fork -Ibrowser-fork/packaging/gamecapture \
+            -Iobs/libobs -Iobs/build-fedora/config -Iobs/plugins/cherries-gameaudio/src \
+            browser-fork/tests/game-audio-stream.c \
+            obs/plugins/cherries-gameaudio/src/pipewire-audio.c \
+            legacy-pulse-audio-capture-app.c \
+            $(pkg-config --cflags --libs libpipewire-0.3) \
+            -L/opt/cherries-obs/lib64 -Wl,-rpath,/opt/cherries-obs/lib64 -lobs -lm -lpthread \
+            -o game-audio-stream-legacy-test
+          dbus-run-session -- bash browser-fork/tests/game-audio-stream.sh pulse ./game-audio-stream-legacy-test legacy-failure
+          dbus-run-session -- bash browser-fork/tests/game-audio-stream.sh pulse

@@ -1,11 +1,41 @@
 #pragma once
 #include <stdbool.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
 
 typedef pid_t (*cherries_audio_parent_fn)(pid_t);
+
+static inline pid_t cherries_audio_parse_pid(const char *text)
+{
+	if (!text || !*text)
+		return 0;
+	unsigned value = 0;
+	for (; *text; ++text) {
+		if (*text < '0' || *text > '9')
+			return 0;
+		unsigned digit = (unsigned)(*text - '0');
+		if (value > ((unsigned)INT_MAX - digit) / 10)
+			return 0;
+		value = value * 10 + digit;
+	}
+	return value > 1 ? (pid_t)value : 0;
+}
+
+static inline pid_t cherries_audio_client_process(const char *api, const char *secure_pid,
+						 const char *application_pid)
+{
+	/* Pulse clients are proxied: pipewire.sec.pid identifies the bridge, while
+	 * application.process.id identifies the app whose sound we must capture.
+	 * Native PipeWire clients can use the protocol's host process identity. */
+	if (api && strcmp(api, "pipewire-pulse") == 0)
+		return cherries_audio_parse_pid(application_pid);
+	pid_t process = cherries_audio_parse_pid(secure_pid);
+	return process ? process : cherries_audio_parse_pid(application_pid);
+}
+
 static inline bool cherries_audio_matches_process(pid_t game, pid_t audio, cherries_audio_parent_fn parent)
 {
 	if (game <= 1 || audio <= 1)

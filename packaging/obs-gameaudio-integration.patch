@@ -1,5 +1,5 @@
 diff --git a/src/pipewire-audio-capture-app.c b/src/pipewire-audio-capture-app.c
-index 936e416..dca136a 100644
+index 936e416..6279039 100644
 --- a/src/pipewire-audio-capture-app.c
 +++ b/src/pipewire-audio-capture-app.c
 @@ -19,6 +19,8 @@
@@ -49,7 +49,7 @@ index 936e416..dca136a 100644
  /* System sinks */
  static void system_sink_destroy_cb(void *data)
  {
-@@ -166,13 +176,16 @@ static void on_client_info_cb(void *data, const struct pw_client_info *info)
+@@ -166,13 +176,14 @@ static void on_client_info_cb(void *data, const struct pw_client_info *info)
  	}
  
  	const char *binary = spa_dict_lookup(info->props, PW_KEY_APP_PROCESS_BINARY);
@@ -58,11 +58,9 @@ index 936e416..dca136a 100644
 -	}
 -
  	struct target_client *client = data;
-+	const char *pid = spa_dict_lookup(info->props, "pipewire.sec.pid");
-+	if (!pid)
-+		pid = spa_dict_lookup(info->props, PW_KEY_APP_PROCESS_ID);
-+	if (pid)
-+		client->process_id = (pid_t)strtol(pid, NULL, 10);
++	client->process_id = cherries_audio_client_process(spa_dict_lookup(info->props, PW_KEY_CLIENT_API),
++		spa_dict_lookup(info->props, "pipewire.sec.pid"),
++		spa_dict_lookup(info->props, PW_KEY_APP_PROCESS_ID));
  	bfree((void *)client->binary);
  	client->binary = bstrdup(binary);
 +	if (client->owner->game_audio_mode)
@@ -70,7 +68,7 @@ index 936e416..dca136a 100644
  }
  
  static const struct pw_client_events client_events = {
-@@ -189,6 +202,8 @@ static void register_target_client(struct obs_pw_audio_capture_app *pwac, uint32
+@@ -189,6 +200,8 @@ static void register_target_client(struct obs_pw_audio_capture_app *pwac, uint32
  	}
  
  	struct target_client *client = pw_proxy_get_user_data(client_proxy);
@@ -79,7 +77,7 @@ index 936e416..dca136a 100644
  	client->binary = NULL;
  	client->app_name = bstrdup(app_name);
  	client->id = global_id;
-@@ -244,13 +259,14 @@ static void on_node_info_cb(void *data, const struct pw_node_info *info)
+@@ -244,13 +257,12 @@ static void on_node_info_cb(void *data, const struct pw_node_info *info)
  	}
  
  	const char *binary = spa_dict_lookup(info->props, PW_KEY_APP_PROCESS_BINARY);
@@ -88,9 +86,7 @@ index 936e416..dca136a 100644
 -	}
 -
  	struct target_node *node = data;
-+	const char *pid = spa_dict_lookup(info->props, PW_KEY_APP_PROCESS_ID);
-+	if (pid)
-+		node->process_id = (pid_t)strtol(pid, NULL, 10);
++	node->process_id = cherries_audio_parse_pid(spa_dict_lookup(info->props, PW_KEY_APP_PROCESS_ID));
  	bfree((void *)node->binary);
  	node->binary = bstrdup(binary);
 +	if (node->owner->game_audio_mode)
@@ -98,7 +94,7 @@ index 936e416..dca136a 100644
  }
  
  static const struct pw_node_events node_events = {
-@@ -268,6 +284,8 @@ static void register_target_node(struct obs_pw_audio_capture_app *pwac, uint32_t
+@@ -268,6 +280,8 @@ static void register_target_node(struct obs_pw_audio_capture_app *pwac, uint32_t
  	}
  
  	struct target_node *node = pw_proxy_get_user_data(node_proxy);
@@ -107,7 +103,7 @@ index 936e416..dca136a 100644
  	node->name = bstrdup(name);
  	node->app_name = bstrdup(app_name);
  	node->binary = NULL;
-@@ -284,6 +302,20 @@ static void register_target_node(struct obs_pw_audio_capture_app *pwac, uint32_t
+@@ -284,6 +298,19 @@ static void register_target_node(struct obs_pw_audio_capture_app *pwac, uint32_t
  
  static bool node_is_targeted(struct obs_pw_audio_capture_app *pwac, struct target_node *node)
  {
@@ -117,8 +113,7 @@ index 936e416..dca136a 100644
 +		obs_pw_audio_proxy_list_iter_init(&iter, &pwac->clients);
 +		struct target_client *client;
 +		while (obs_pw_audio_proxy_list_iter_next(&iter, (void **)&client)) {
-+			if (client->id == node->client_id && client->process_id > 1 &&
-+			    client->binary && strcmp(client->binary, "pipewire-pulse") != 0) {
++			if (client->id == node->client_id && client->process_id > 1) {
 +				audio_pid = client->process_id;
 +				break;
 +			}
@@ -128,7 +123,7 @@ index 936e416..dca136a 100644
  	bool targeted = false;
  	for (size_t i = 0; i < pwac->selections.num && !targeted; i++) {
  		const char *selection = pwac->selections.array[i];
-@@ -435,6 +467,8 @@ static void finalize_capture_sink(struct obs_pw_audio_capture_app *pwac)
+@@ -435,6 +462,8 @@ static void finalize_capture_sink(struct obs_pw_audio_capture_app *pwac)
  		blog(LOG_WARNING, "[pipewire-audio] Error connecting stream %p to app capture sink %u",
  		     pwac->pw.audio.stream, pwac->sink.id);
  	}
@@ -137,7 +132,7 @@ index 936e416..dca136a 100644
  }
  
  static void on_sink_proxy_bound_cb(void *data, uint32_t global_id)
-@@ -1059,6 +1093,8 @@ static void *pipewire_audio_capture_app_create(obs_data_t *settings, obs_source_
+@@ -1059,6 +1088,8 @@ static void *pipewire_audio_capture_app_create(obs_data_t *settings, obs_source_
  	pwac->sink.id = SPA_ID_INVALID;
  	dstr_init(&pwac->sink.position);
  
@@ -146,7 +141,7 @@ index 936e416..dca136a 100644
  	pwac->capture_mode = obs_data_get_int(settings, SETTING_CAPTURE_MODE);
  	pwac->match_priority = obs_data_get_int(settings, SETTING_MATCH_PRIORITY);
  	pwac->except = obs_data_get_bool(settings, SETTING_EXCLUDE_SELECTIONS);
-@@ -1111,6 +1147,8 @@ static void pipewire_audio_capture_app_update(void *data, obs_data_t *settings)
+@@ -1111,6 +1142,8 @@ static void pipewire_audio_capture_app_update(void *data, obs_data_t *settings)
  
  	pw_thread_loop_lock(pwac->pw.thread_loop);
  
@@ -155,7 +150,7 @@ index 936e416..dca136a 100644
  	pwac->capture_mode = obs_data_get_int(settings, SETTING_CAPTURE_MODE);
  	pwac->match_priority = obs_data_get_int(settings, SETTING_MATCH_PRIORITY);
  	pwac->except = obs_data_get_bool(settings, SETTING_EXCLUDE_SELECTIONS);
-@@ -1119,6 +1157,8 @@ static void pipewire_audio_capture_app_update(void *data, obs_data_t *settings)
+@@ -1119,6 +1152,8 @@ static void pipewire_audio_capture_app_update(void *data, obs_data_t *settings)
  	build_selections(pwac, settings);
  
  	connect_targets(pwac);
@@ -164,7 +159,7 @@ index 936e416..dca136a 100644
  
  	pw_thread_loop_unlock(pwac->pw.thread_loop);
  }
-@@ -1196,3 +1236,28 @@ void pipewire_audio_capture_app_load(void)
+@@ -1196,3 +1231,28 @@ void pipewire_audio_capture_app_load(void)
  
  	obs_register_source(&pipewire_audio_capture_application);
  }

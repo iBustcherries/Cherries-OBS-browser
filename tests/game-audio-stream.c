@@ -7,6 +7,8 @@
 #include <signal.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <stdlib.h>
+#include <string.h>
 
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE("cherries-test", "en-US")
@@ -60,8 +62,9 @@ static double measure(void)
 }
 int main(int argc, char **argv)
 {
-	if (argc != 3)
+	if (argc != 3 && argc != 4)
 		return 2;
+	bool pulse = argc == 4 && strcmp(argv[3], "pulse") == 0;
 	pid_t unrelated = (pid_t)strtol(argv[2], NULL, 10);
 	if (!obs_startup("en-US", NULL, NULL))
 		return 3;
@@ -85,7 +88,10 @@ int main(int argc, char **argv)
 	obs_source_add_audio_capture_callback(source, received, NULL);
 	pid_t game = fork();
 	if (game == 0) {
-		execlp("pw-cat", "pw-cat", "--playback", "--target=cherries-test-sink", argv[1], (char *)NULL);
+		if (pulse)
+			execlp("paplay", "paplay", "--device=cherries-test-sink", argv[1], (char *)NULL);
+		else
+			execlp("pw-cat", "pw-cat", "--playback", "--target=cherries-test-sink", argv[1], (char *)NULL);
 		_exit(127);
 	}
 	if (game < 0)
@@ -97,7 +103,17 @@ int main(int argc, char **argv)
 	double switched = measure();
 	cherries_game_audio_set_pid(capture, 0);
 	double stopped = measure();
-	printf("Audio RMS: selected game %.3f; switched target %.3f; stopped %.3f\n", selected, switched, stopped);
+	double bridge = 0;
+	if (pulse) {
+		const char *bridge_text = getenv("CHERRIES_TEST_PULSE_BRIDGE_PID");
+		pid_t bridge_pid = bridge_text ? (pid_t)strtol(bridge_text, NULL, 10) : 0;
+		if (bridge_pid <= 1)
+			return 8;
+		cherries_game_audio_set_pid(capture, bridge_pid);
+		bridge = measure();
+	}
+	printf("Audio RMS (%s): selected game %.3f; switched target %.3f; stopped %.3f; bridge %.3f\n",
+		pulse ? "pulse" : "native", selected, switched, stopped, bridge);
 	kill(game, SIGTERM);
 	waitpid(game, NULL, 0);
 	obs_source_remove_audio_capture_callback(source, received, NULL);
@@ -107,5 +123,5 @@ int main(int argc, char **argv)
 	pw_deinit();
 	/* Selected tone amplitude .2, unrelated tone amplitude .6. Capturing the
      * full desktop mix would produce RMS around .447 instead of .141. */
-	return selected > .08 && selected < .24 && switched > .32 && switched < .52 && stopped < .005 ? 0 : 7;
+	return selected > .08 && selected < .24 && switched > .32 && switched < .52 && stopped < .005 && bridge < .005 ? 0 : 7;
 }

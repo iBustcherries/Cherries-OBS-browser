@@ -107,6 +107,17 @@ and track assignments apply to its audio. This does not change the game's
 existing speaker/headphone output. If Desktop Audio captures the same device,
 disable that Desktop Audio capture to avoid recording the game twice.
 
+Release 19 corrects process selection for games using PulseAudio through
+PipeWire. For a `client.api=pipewire-pulse` client, `pipewire.sec.pid` belongs
+to the bridge, even when the client binary/name describes the game. Match the
+game's `application.process.id` instead; native PipeWire clients keep the
+protocol's host PID. Missing or invalid Pulse app PIDs never fall back to the
+shared bridge PID. The fix applies to all PulseAudio games, not just Dead Cells.
+Live tests cover native PipeWire and PulseAudio game isolation, switching,
+stopping, and rejection of the shared Pulse bridge as a game target. A legacy
+PID-selection control must reproduce silent game capture before the corrected
+Pulse test can pass.
+
 The backend reuses obs-pipewire-audio-capture at
 6120aa622792908e4529b0e171b2acce5efb3f18. It matches PipeWire process metadata,
 including PulseAudio-compatible streams, instead of recording the full desktop

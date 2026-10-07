@@ -1,5 +1,10 @@
 #!/bin/bash
 set -euo pipefail
+mode=${1:-native}
+test_binary=$(realpath "${2:-./game-audio-stream-test}")
+expected=${3:-pass}
+if [[ "$mode" != native && "$mode" != pulse ]]; then exit 2; fi
+if [[ "$expected" != pass && "$expected" != legacy-failure ]]; then exit 2; fi
 export XDG_RUNTIME_DIR
 XDG_RUNTIME_DIR=$(mktemp -d)
 export XDG_CONFIG_HOME="$XDG_RUNTIME_DIR/config"
@@ -26,10 +31,16 @@ wireplumber > "$XDG_RUNTIME_DIR/wireplumber.log" 2>&1 &
 manager=$!
 player=''
 display_server=''
+pulse_server=''
 cleanup() {
     if [ -n "$player" ]; then kill "$player" 2>/dev/null || true; fi
+    if [ -n "$pulse_server" ]; then kill "$pulse_server" 2>/dev/null || true; fi
     kill "$manager" "$server" 2>/dev/null || true
-    if [ -n "$display_server" ]; then kill "$display_server" 2>/dev/null || true; fi
+    if [ -n "$display_server" ]; then
+        kill "$display_server" 2>/dev/null || true
+        wait "$display_server" 2>/dev/null || true
+    fi
+    wait 2>/dev/null || true
     rm -rf "$XDG_RUNTIME_DIR"
 }
 trap cleanup EXIT
@@ -53,6 +64,18 @@ if [ "$ready" != true ]; then
     cat "$XDG_RUNTIME_DIR/pipewire.log" "$XDG_RUNTIME_DIR/wireplumber.log"
     exit 1
 fi
+if [[ "$mode" == pulse ]]; then
+    export PULSE_SERVER="unix:$XDG_RUNTIME_DIR/pulse/native"
+    pipewire-pulse > "$XDG_RUNTIME_DIR/pulse.log" 2>&1 &
+    pulse_server=$!
+    export CHERRIES_TEST_PULSE_BRIDGE_PID="$pulse_server"
+    ready=false
+    for attempt in {1..30}; do
+        if pactl info >/dev/null 2>&1; then ready=true; break; fi
+        sleep 0.2
+    done
+    if [[ "$ready" != true ]]; then cat "$XDG_RUNTIME_DIR/pulse.log"; exit 1; fi
+fi
 python3 - "$XDG_RUNTIME_DIR" <<'PY'
 import array, math, pathlib, sys, wave
 root = pathlib.Path(sys.argv[1])
@@ -67,9 +90,23 @@ for name, amplitude, frequency in [('game', .2, 440), ('unrelated', .6, 880)]:
         output.setframerate(48000)
         output.writeframes(samples.tobytes())
 PY
-pw-cat --playback --target=cherries-test-sink "$XDG_RUNTIME_DIR/unrelated.wav" > "$XDG_RUNTIME_DIR/player.log" 2>&1 &
+if [[ "$mode" == pulse ]]; then
+    paplay --device=cherries-test-sink "$XDG_RUNTIME_DIR/unrelated.wav" > "$XDG_RUNTIME_DIR/player.log" 2>&1 &
+else
+    pw-cat --playback --target=cherries-test-sink "$XDG_RUNTIME_DIR/unrelated.wav" > "$XDG_RUNTIME_DIR/player.log" 2>&1 &
+fi
 player=$!
-if ! ./game-audio-stream-test "$XDG_RUNTIME_DIR/game.wav" "$player"; then
+result=0
+"$test_binary" "$XDG_RUNTIME_DIR/game.wav" "$player" "$mode" > "$XDG_RUNTIME_DIR/result.log" 2>&1 || result=$?
+cat "$XDG_RUNTIME_DIR/result.log"
+if [[ "$expected" == legacy-failure ]]; then
+    if [[ "$result" != 7 ]] || ! grep -Eq 'Audio RMS \(pulse\): selected game 0\.000; switched target 0\.000' "$XDG_RUNTIME_DIR/result.log"; then
+        echo 'Expected legacy Pulse bridge PID mismatch was not reproduced' >&2
+        exit 1
+    fi
+    echo 'Legacy Pulse bridge PID mismatch reproduced; selected game and switched app were silent'
+elif [[ "$result" != 0 ]]; then
     cat "$XDG_RUNTIME_DIR/pipewire.log" "$XDG_RUNTIME_DIR/wireplumber.log" "$XDG_RUNTIME_DIR/player.log" "$XDG_RUNTIME_DIR/display.log"
+    if [[ -f "$XDG_RUNTIME_DIR/pulse.log" ]]; then cat "$XDG_RUNTIME_DIR/pulse.log"; fi
     exit 1
 fi
