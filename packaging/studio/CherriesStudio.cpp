@@ -176,7 +176,8 @@ public:
         connect(table,&QTableWidget::cellDoubleClicked,this,[this](int row,int){
             if (auto item=table->item(row,0)) {
                 auto s=obs_get_source_by_uuid(item->data(Qt::UserRole).toString().toUtf8().constData());
-                if(s) obs_frontend_set_current_scene(s); obs_source_release(s);
+                if(s) obs_frontend_set_current_scene(s);
+                obs_source_release(s);
             }
         });
         auto row=new QHBoxLayout; pairLayout->addLayout(row);
@@ -201,8 +202,9 @@ public:
             auto c=canvas(); auto b=c ? c->findChild<QPushButton *>("canvasReplay") : nullptr;
             if(b) b->click();
         });
-        button(replay,"Save Landscape Replay",[]{obs_frontend_replay_buffer_save();});
-        button(replay,"Start / Stop Landscape Replay",[]{
+        auto landscapeReplay=new QHBoxLayout; captureLayout->addLayout(landscapeReplay);
+        button(landscapeReplay,"Save Landscape Replay",[]{obs_frontend_replay_buffer_save();});
+        button(landscapeReplay,"Start / Stop Landscape Replay",[]{
             if(obs_frontend_replay_buffer_active()) obs_frontend_replay_buffer_stop(); else obs_frontend_replay_buffer_start();
         });
         auto camera=new QHBoxLayout; captureLayout->addLayout(camera);
