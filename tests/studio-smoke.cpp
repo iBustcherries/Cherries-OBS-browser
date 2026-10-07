@@ -9,6 +9,7 @@
 #include <QTimer>
 #include <QTableWidget>
 #include <QFile>
+#include <QMessageBox>
 #include <cmath>
 #include <cstdlib>
 
@@ -61,6 +62,16 @@ static void run() {
     auto dock=window->findChild<QDockWidget *>("VerticalCanvasDock");
     auto dest=window->findChild<QDockWidget *>("AitumMultistreamDock");
     require(dock&&dest&&window->findChild<QTableWidget *>("cherriesScenePairs"),"portrait, destinations and scene-pair controls exist");
+    require(window->metaObject()->indexOfSlot("CherriesManageBroadcast()") >= 0,"broadcast action is a registered Qt slot");
+    auto manage=dest->findChild<QPushButton *>("cherriesManageBroadcast");
+    require(manage,"manage broadcast button exists");
+    QTimer::singleShot(200,window,[]{
+        auto notice=window->findChild<QMessageBox *>("cherriesBroadcastNotice");
+        require(notice&&notice->isVisible(),"manage broadcast opens visible guidance without an OAuth account");
+        require(!obs_frontend_streaming_active(),"manage broadcast does not start streaming");
+        notice->accept();
+    });
+    manage->click();
     auto sceneSource=obs_frontend_get_current_scene();
     require(sceneSource,"main scene exists");
     auto scene=obs_scene_from_source(sceneSource);

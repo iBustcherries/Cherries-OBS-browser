@@ -23,8 +23,9 @@ Cherries Studio > Restore Mockup A Layout restores the initial arrangement.
 The OBS Account card uses the current native OBS service directly, including its
 account authorization. Additional destinations currently use the engines' stream
 key configuration. This does not add simultaneous native OAuth sessions for all
-destinations. Manage Broadcast opens the native Twitch stream-info dock when
-available, or the OBS broadcast flow.
+destinations. Manage Broadcast opens the native Twitch stream-info dock (creating
+it on demand) or YouTube's broadcast setup dialog. A stream-key-only profile gets
+visible account-connection guidance. This action never starts or stops a stream.
 
 ## Feature map
 

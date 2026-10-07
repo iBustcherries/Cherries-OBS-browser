@@ -121,9 +121,8 @@ void MultistreamDock::CherriesHeader()
     manage->setObjectName("cherriesManageBroadcast");
     connect(manage, &QPushButton::clicked, this, [] {
         auto main = static_cast<QMainWindow *>(obs_frontend_get_main_window());
-        auto info = main->findChild<QDockWidget *>("twitchInfo");
-        if (info) { info->show(); info->raise(); }
-        else QMetaObject::invokeMethod(main, "BroadcastButtonClicked", Qt::QueuedConnection);
+        if (!QMetaObject::invokeMethod(main, "CherriesManageBroadcast", Qt::QueuedConnection))
+            QMessageBox::warning(main, "Manage Broadcast", "The broadcast action is unavailable. Please update the complete Cherries OBS package.");
     });
     layout->addWidget(manage);
     auto start = new QPushButton("Start Selected", header);

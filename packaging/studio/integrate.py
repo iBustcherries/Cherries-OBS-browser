@@ -14,6 +14,24 @@ def change(path, old, new, count=1):
     assert text.count(old) == count, (path, old[:80], text.count(old))
     path.write_text(text.replace(old, new))
 
+# A real Qt slot bridges the plugin to the current native account. The upstream
+# BroadcastButtonClicked method is private and not invokable through Qt metadata.
+change(root / 'frontend/widgets/OBSBasic.hpp', '\tvoid SetupBroadcast();',
+       '\tvoid SetupBroadcast();\n\tvoid CherriesManageBroadcast();')
+shutil.copyfile(here / 'CherriesBroadcast.inc', root / 'frontend/widgets/CherriesBroadcast.inc')
+with (root / 'frontend/widgets/OBSBasic_YouTube.cpp').open('a') as f:
+    f.write('\n#include "CherriesBroadcast.inc"\n')
+change(root / 'frontend/oauth/TwitchAuth.hpp', '\tvoid LoadSecondaryUIPanes();',
+       '\tvoid LoadSecondaryUIPanes();\n\tvoid CherriesShowStreamInfo();')
+with (root / 'frontend/oauth/TwitchAuth.cpp').open('a') as f:
+    f.write('''
+void TwitchAuth::CherriesShowStreamInfo()
+{
+    if (!uiLoaded) LoadUI();
+    if (cef && uiLoaded) LoadSecondaryUIPanes();
+}
+''')
+
 for path in (vertical, multi):
     shutil.copyfile(here / 'engine.cmake', path / 'CMakeLists.txt')
     # Fork updates ship through the Cherries RPM; retain upstream attribution.
