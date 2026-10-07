@@ -14,8 +14,9 @@ add_library(${engine_name} MODULE ${engine_sources} resources.qrc)
 target_include_directories(${engine_name} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}" "${CMAKE_BINARY_DIR}/config")
 target_link_libraries(${engine_name} PRIVATE OBS::libobs OBS::frontend-api Qt::Widgets CURL::libcurl)
 target_compile_features(${engine_name} PRIVATE cxx_std_17)
-if(ENABLE_WAYLAND)
-  target_compile_definitions(${engine_name} PRIVATE ENABLE_WAYLAND)
-endif()
+# obsconfig.h supplies ENABLE_WAYLAND using the host build configuration.
+# Keep upstream deprecation/unused-parameter warnings visible without applying
+# OBS's first-party warnings-as-errors policy to the imported engines.
+set_target_properties(${engine_name} PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
 set_target_properties_obs(${engine_name} PROPERTIES PREFIX "" AUTOMOC ON AUTORCC ON AUTOUIC ON FOLDER plugins/cherries-studio)
 target_enable(${engine_name})
