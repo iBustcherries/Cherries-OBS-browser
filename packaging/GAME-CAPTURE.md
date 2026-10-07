@@ -8,6 +8,14 @@ selected; when it exits, capture falls back to the remaining matching game.
 Common launcher processes are excluded in automatic mode. The executable
 selector remains available for explicit selection, including launcher UI.
 
+Release 18 removes the OpenGL hook's eager dependency on the graphics library.
+Graphics entry points remain resolved lazily, after the game's modules load.
+This avoids preempting the writable OpenGL function-pointer variables exported
+by native Dead Cells' HashLink SDL module. Regression checks reproduce the
+resulting initialization crash with the old dependency order and verify that
+the installed 64-bit and 32-bit hooks allow initialization. Actual Dead Cells
+video and game-audio capture still require testing on the user's machine.
+
 Release 17 adds **Tools > Game Capture Setup** inside OBS. For normal Steam
 use, quit Steam once and select **Enable automatic capture through normal
 Steam**. Open your usual Steam shortcut again. Compatible future Vulkan and

@@ -194,6 +194,8 @@ jobs:
           cherries-gamecapture /usr/bin/true 2> gamecapture-preload.txt
           if grep -E 'cannot be preloaded|symbol lookup error' gamecapture-preload.txt; then exit 1; fi
           bash browser-fork/tests/game-launch.sh /opt/cherries-obs/lib64/obs_glcapture/libobs_glcapture.so
+          bash browser-fork/tests/opengl-startup.sh /opt/cherries-obs/lib64/obs_glcapture/libobs_glcapture.so 64
+          bash browser-fork/tests/opengl-startup.sh /opt/cherries-obs/lib/obs_glcapture/libobs_glcapture.so 32
       - name: Verify automatic Vulkan layer loading
         shell: bash
         run: |

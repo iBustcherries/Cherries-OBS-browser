@@ -1,5 +1,5 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 81a8309..d42bb29 100644
+index 81a8309..ed0e3c0 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -65,7 +65,11 @@ if (BUILD_PLUGIN)
@@ -42,7 +42,7 @@ index 81a8309..d42bb29 100644
  set_target_properties(VkLayer_obs_vkcapture PROPERTIES LINK_FLAGS "-Wl,--version-script=\"${CMAKE_CURRENT_SOURCE_DIR}/src/vklayer.version\"")
  target_link_libraries(VkLayer_obs_vkcapture Vulkan::Vulkan)
  target_include_directories(VkLayer_obs_vkcapture PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>)
-@@ -115,7 +125,7 @@ if (HAVE_X11_XCB)
+@@ -115,13 +125,16 @@ if (HAVE_X11_XCB)
      )
  endif()
  
@@ -50,8 +50,18 @@ index 81a8309..d42bb29 100644
 +set(GL_SOURCES src/dlsym.c src/elfhacks.c src/glinject.c src/capture.c src/CherriesGameLaunch.c)
  add_library(obs_glcapture MODULE ${GL_SOURCES})
  set_target_properties(obs_glcapture PROPERTIES LINK_FLAGS "-Wl,--version-script=\"${CMAKE_CURRENT_SOURCE_DIR}/src/glinject.version\"")
- target_link_libraries(obs_glcapture ${CMAKE_DL_LIBS} OpenGL::GL)
-@@ -140,3 +150,12 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/obs_vkcapture${LAYER_SUFFIX}.json
+-target_link_libraries(obs_glcapture ${CMAKE_DL_LIBS} OpenGL::GL)
++# Resolve GL lazily with dlopen. An eager/global GL dependency preempts the
++# writable GL function-pointer symbols exported by HashLink's SDL module.
++target_link_libraries(obs_glcapture ${CMAKE_DL_LIBS})
+ target_include_directories(obs_glcapture PRIVATE
+     $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
+     $<TARGET_PROPERTY:Vulkan::Vulkan,INTERFACE_INCLUDE_DIRECTORIES>
++    $<TARGET_PROPERTY:OpenGL::GL,INTERFACE_INCLUDE_DIRECTORIES>
+ )
+ 
+ configure_file(plugin-macros.h.in ${CMAKE_CURRENT_BINARY_DIR}/plugin-macros.h @ONLY)
+@@ -140,3 +153,12 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/obs_vkcapture${LAYER_SUFFIX}.json
  install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/obs-gamecapture
      src/obs-vkcapture src/obs-glcapture
      DESTINATION "${CMAKE_INSTALL_FULL_BINDIR}")
