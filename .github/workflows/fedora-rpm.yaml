@@ -88,6 +88,7 @@ jobs:
       - name: Integrate fork and download verified CEF
         env:
           CHERRIES_TWITCH_CLIENT_ID: ${{ vars.CHERRIES_TWITCH_CLIENT_ID }}
+          CHERRIES_YOUTUBE_CLIENT_JSON: ${{ secrets.CHERRIES_YOUTUBE_CLIENT_JSON }}
         shell: bash
         run: |
           rsync -a --delete --exclude=.git --exclude=.github browser-fork/ obs/plugins/obs-browser/
@@ -95,6 +96,7 @@ jobs:
           cp browser-fork/packaging/twitch/* obs/frontend/oauth/
           git -C obs apply ../browser-fork/packaging/obs-youtube-integration.patch
           cp browser-fork/packaging/youtube/* obs/frontend/oauth/
+          python3 browser-fork/packaging/configure-youtube-client.py --required obs/frontend/oauth/CherriesYouTubeBundled.hpp
           git -C obs apply ../browser-fork/packaging/obs-capture-setup-integration.patch
           cp browser-fork/packaging/gamecapture/CherriesCaptureSetup.* browser-fork/packaging/gamecapture/CherriesSteam*.hpp obs/frontend/dialogs/
           git -C obs/plugins/cherries-gamecapture apply "$GITHUB_WORKSPACE/browser-fork/packaging/obs-vkcapture-integration.patch"
@@ -130,6 +132,7 @@ jobs:
       - name: Check YouTube callbacks and automatic game selection
         shell: bash
         run: |
+          python3 browser-fork/tests/youtube-build-client.py
           g++ -std=c++20 -fPIC -Ibrowser-fork browser-fork/tests/youtube-session.cpp \
             $(pkg-config --cflags --libs Qt6Core) -o youtube-session-test
           ./youtube-session-test

@@ -1,5 +1,6 @@
 #pragma once
 #include "CherriesYouTubeProtocol.hpp"
+#include "CherriesYouTubeBundled.hpp"
 #include <OBSApp.hpp>
 #include <widgets/OBSBasic.hpp>
 #include <QFile>
@@ -16,6 +17,12 @@ inline CherriesYouTubeCredentials CherriesYouTubeClient(QWidget *owner = nullptr
 		if (client.valid())
 			return client;
 	}
+	// Keep the original application client for existing tokens. New installs use
+	// the distribution's desktop client and proceed directly to Google sign-in.
+	const CherriesYouTubeCredentials bundled{QString::fromUtf8(CherriesBundledYouTubeId),
+						QString::fromUtf8(CherriesBundledYouTubeSecret)};
+	if (bundled.valid())
+		return bundled;
 	if (!ask)
 		return {};
 	QMessageBox::information(
