@@ -160,7 +160,18 @@ for path, start_marker, end_marker in [
 change(vertical / 'vertical-canvas.cpp', '\tauto buttonRow = new QHBoxLayout(this);',
        '\tauto hiddenControls = new QWidget(this);\n\thiddenControls->setObjectName("cherriesPortraitControls");\n\tauto buttonRow = new QHBoxLayout(hiddenControls);')
 change(vertical / 'vertical-canvas.cpp', '\tmainLayout->addLayout(buttonRow);', '\thiddenControls->hide();')
-change(vertical / 'vertical-canvas.cpp', '\tl->addWidget(enablePreviewButton);', '\tl->addWidget(enablePreviewButton);\n\tenablePreviewButton->hide();')
+change(vertical / 'vertical-canvas.cpp', '\tl->addWidget(enablePreviewButton);', '''\tl->addWidget(enablePreviewButton);
+    enablePreviewButton->hide();
+    auto disabledHint = new QLabel("Preview disabled — right-click to enable");
+    disabledHint->setAlignment(Qt::AlignCenter);
+    l->addWidget(disabledHint);
+    previewDisabledWidget->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(previewDisabledWidget, &QWidget::customContextMenuRequested, this,
+        [this, enablePreviewButton](const QPoint &point) {
+            QMenu menu(previewDisabledWidget);
+            menu.addAction("Enable preview", enablePreviewButton, &QPushButton::click);
+            menu.exec(previewDisabledWidget->mapToGlobal(point));
+        });''')
 change(vertical / 'vertical-canvas.cpp', '\tconst auto sceneRow = new QHBoxLayout(this);',
        '\tauto hiddenScenes = new QWidget(this);\n\tconst auto sceneRow = new QHBoxLayout(hiddenScenes);')
 change(vertical / 'vertical-canvas.cpp', '\tmainLayout->insertLayout(0, sceneRow);', '\thiddenScenes->hide();')
