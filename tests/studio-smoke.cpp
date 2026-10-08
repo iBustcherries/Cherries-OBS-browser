@@ -10,6 +10,9 @@
 #include <QTableWidget>
 #include <QFile>
 #include <QMessageBox>
+#include <QDialog>
+#include <QVariantMap>
+#include <QAbstractButton>
 #include <cmath>
 #include <cstdlib>
 
@@ -19,6 +22,20 @@ static QTimer *toneTimer;
 static obs_source_t *tone;
 static obs_source_t *color;
 static obs_output_t *mainOutput, *sharedOutput, *portraitOutput;
+static QVariantMap testBinding(const char *name, const char *id, const char *port) {
+    return {{"ok",true},{"server",QString("rtmp://127.0.0.1:")+port+"/live"},
+        {"stream_key",name},{"stream_id",QString(id)+"-stream"},{"broadcast_id",id},
+        {"account_id","test-channel"},{"channel_title","Test channel"},{"title",id},
+        {"auto_start",true},{"auto_stop",true}};
+}
+static bool applyBinding(const char *name, bool portrait, QVariantMap binding) {
+    auto dock=window->findChild<QDockWidget *>("AitumMultistreamDock");
+    bool result=false;
+    const bool invoked=QMetaObject::invokeMethod(dock->widget(),"CherriesApplyYouTubeBinding",Qt::DirectConnection,
+        Q_RETURN_ARG(bool,result),Q_ARG(QString,QString::fromUtf8(name)),Q_ARG(bool,portrait),Q_ARG(QVariantMap,binding));
+    if (!invoked) { blog(LOG_ERROR,"[studio-test] Binding slot unavailable"); std::_Exit(21); }
+    return result;
+}
 static void require(bool ok, const char *message) {
     if (!ok) { blog(LOG_ERROR,"[studio-test] FAIL: %s",message); std::_Exit(21); }
     blog(LOG_INFO,"[studio-test] PASS: %s",message);
@@ -53,6 +70,7 @@ static void verifyStreams() {
     require(obs_output_get_video_encoder(mainOutput)!=obs_output_get_video_encoder(portraitOutput),"portrait has its own video encoder");
     require(obs_output_get_width(portraitOutput)==360&&obs_output_get_height(portraitOutput)==640,"portrait dimensions are correct");
     require(obs_output_get_total_frames(sharedOutput)>30&&obs_output_get_total_frames(portraitOutput)>30,"both additional destinations receive video frames");
+    require(!applyBinding("Shared Test",false,testBinding("shared","changed-while-live","19351")),"active destination binding cannot be replaced");
     obs_output_stop(sharedOutput); obs_output_stop(portraitOutput); obs_frontend_streaming_stop();
     QTimer::singleShot(5000,window,finish);
 }
@@ -62,6 +80,17 @@ static void run() {
     auto dock=window->findChild<QDockWidget *>("VerticalCanvasDock");
     auto dest=window->findChild<QDockWidget *>("AitumMultistreamDock");
     require(dock&&dest&&window->findChild<QTableWidget *>("cherriesScenePairs"),"portrait, destinations and scene-pair controls exist");
+    auto hiddenControls=dock->findChild<QWidget *>("cherriesPortraitControls");
+    require(hiddenControls&&hiddenControls->isHidden(),"portrait control strip is hidden");
+    for (auto button : dock->widget()->findChildren<QAbstractButton *>())
+        require(!button->isVisibleTo(dock->widget()),"portrait canvas has no visible buttons");
+    auto expand=dest->findChild<QPushButton *>("cherriesExpandDestination");
+    auto details=expand ? expand->parentWidget()->findChild<QWidget *>("cherriesDestinationDetails") : nullptr;
+    require(expand&&details&&details->isHidden(),"destination details are collapsed by default");
+    expand->click(); require(!details->isHidden(),"destination details expand");
+    expand->click(); require(details->isHidden(),"destination details collapse");
+    auto capture=window->findChild<QDockWidget *>("cherriesCaptureDock");
+    require(capture&&capture->findChildren<QPushButton *>().size()>=8,"portrait controls remain available in Capture and Clips");
     require(window->metaObject()->indexOfSlot("CherriesManageBroadcast()") >= 0,"broadcast action is a registered Qt slot");
     auto manage=dest->findChild<QPushButton *>("cherriesManageBroadcast");
     require(manage,"manage broadcast button exists");
@@ -72,6 +101,7 @@ static void run() {
         notice->accept();
     });
     manage->click();
+    require(window->metaObject()->indexOfSlot("CherriesYouTubeDestination(QVariantMap)") >= 0,"per-destination YouTube bridge is registered");
     auto sceneSource=obs_frontend_get_current_scene();
     require(sceneSource,"main scene exists");
     auto scene=obs_scene_from_source(sceneSource);
@@ -99,6 +129,25 @@ static void run() {
     auto item=obs_scene_find_source(copied,"Shared Test Color");
     require(item&&obs_sceneitem_get_source(item)==color,"copied layout references the original source");
     obs_scene_release(copied); obs_canvas_release(canvas); obs_source_release(sceneSource);
+    auto first=testBinding("shared","landscape-test","19351");
+    require(applyBinding("Shared Test",false,first),"landscape broadcast binding applied");
+    require(!applyBinding("Portrait Test",true,first),"duplicate broadcast and ingest rejected across canvases");
+    require(applyBinding("Portrait Test",true,testBinding("portrait","portrait-test","19352")),"independent portrait broadcast binding applied");
+    auto primarySettings=obs_service_get_settings(obs_frontend_get_streaming_service());
+    require(QString::fromUtf8(obs_data_get_string(primarySettings,"key"))=="main", "additional bindings preserve main stream key");
+    obs_data_release(primarySettings);
+    QTimer::singleShot(500,window,[]{
+        QTimer::singleShot(200,window,[]{
+            auto accounts=window->findChild<QDialog *>("cherriesYouTubeAccounts");
+            require(accounts&&accounts->isVisible(),"additional YouTube account selector opens without replacing main account");
+            accounts->reject();
+        });
+        QVariantMap result;
+        QVariantMap request={{"operation","configure"},{"name","CI destination"}};
+        require(QMetaObject::invokeMethod(window,"CherriesYouTubeDestination",Qt::DirectConnection,
+            Q_RETURN_ARG(QVariantMap,result),Q_ARG(QVariantMap,request)),"destination account bridge invoked");
+        require(result.isEmpty(),"canceling account selection returns no binding");
+    });
     QTimer::singleShot(2000,window,[dest]{
         auto start=dest->findChild<QPushButton *>("cherriesStartSelected"); require(start,"group start button exists"); start->click();
         QTimer::singleShot(12000,window,verifyStreams);

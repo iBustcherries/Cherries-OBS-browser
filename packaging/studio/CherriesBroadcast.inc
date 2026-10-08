@@ -13,7 +13,7 @@ void OBSBasic::CherriesManageBroadcast()
     };
     Auth *current = GetAuth();
     if (!current) {
-        notice("Connect your main Twitch or YouTube account in Settings > Stream to manage its broadcast here. Additional stream-key destinations are managed on their platform's dashboard.");
+        notice("Connect your main Twitch or YouTube account in Settings > Stream to manage its broadcast here. Additional YouTube accounts can be connected through that destination's Create / select broadcast action.");
         return;
     }
     const QString service = QString::fromUtf8(current->service());

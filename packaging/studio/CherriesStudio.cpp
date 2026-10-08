@@ -132,11 +132,11 @@ class Studio : public QObject {
         if (sources && portraitSources) { main->tabifyDockWidget(sources,portraitSources); sources->raise(); }
         if (transitions && portraitTransitions) main->tabifyDockWidget(transitions,portraitTransitions);
         if (pairs) {
-            main->addDockWidget(Qt::BottomDockWidgetArea,pairs);
+            main->addDockWidget(Qt::BottomDockWidgetArea,pairs); pairs->setFloating(false); pairs->setFloating(false);
             if (scenes) main->tabifyDockWidget(scenes,pairs);
             pairs->show(); pairs->raise();
         }
-        if (clips) { main->addDockWidget(Qt::BottomDockWidgetArea,clips); clips->show(); }
+        if (clips) { main->addDockWidget(Qt::BottomDockWidgetArea,clips); clips->setFloating(false); clips->setFloating(false); clips->show(); }
         if (vertical && destinations) main->resizeDocks({vertical,destinations},{300,330},Qt::Horizontal);
     }
 public:
@@ -156,7 +156,7 @@ public:
         toolbar->addWidget(new QLabel("  Cherries Studio  "));
         auto a=toolbar->addAction("Canvases"); connect(a,&QAction::triggered,this,[this]{reveal(vertical);});
         a=toolbar->addAction("Destinations"); connect(a,&QAction::triggered,this,[this]{reveal(destinations);});
-        a=toolbar->addAction("Recording"); connect(a,&QAction::triggered,this,[this]{reveal(clips); invoke("ConfigButtonClicked");});
+        a=toolbar->addAction("Recording"); connect(a,&QAction::triggered,this,[this]{reveal(clips);});
         a=toolbar->addAction("Settings"); connect(a,&QAction::triggered,this,[this]{QMetaObject::invokeMethod(main,"on_action_Settings_triggered",Qt::QueuedConnection);});
         a=toolbar->addAction("Portrait Settings"); connect(a,&QAction::triggered,this,[this]{invoke("ConfigButtonClicked");});
 

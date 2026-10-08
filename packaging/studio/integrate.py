@@ -3,6 +3,7 @@
 from pathlib import Path
 import shutil
 import sys
+import subprocess
 
 root = Path(sys.argv[1])
 here = Path(__file__).resolve().parent
@@ -93,12 +94,18 @@ void CanvasDock::CherriesCopyMain()
 ''')
 
 shutil.copyfile(here / 'CherriesDestinations.inc', multi / 'CherriesDestinations.inc')
-change(multi / 'multistream.hpp', '#include <QFrame>', '#include <QFrame>\n#include <QCheckBox>\n#include <QPointer>\n#include <QGroupBox>')
+change(multi / 'multistream.hpp', '#include <QFrame>', '#include <QFrame>\n#include <QCheckBox>\n#include <QPointer>\n#include <QGroupBox>\n#include <QVariantMap>')
 change(multi / 'multistream.hpp', 'private:\n', '''private:
     void CherriesHeader();
     void CherriesCard(QGroupBox *, obs_data_t *, bool, QPushButton *);
     void CherriesStartSelected();
     void CherriesStartExtras();
+    void CherriesBroadcastMenu();
+    bool CherriesCanStart(obs_data_t *);
+    void CherriesManageYouTube(obs_data_t *, bool, const QString &);
+    obs_output_t *CherriesGetOutput(obs_data_t *, bool);
+    QVariantMap CherriesBindingRequest(obs_data_t *);
+    Q_INVOKABLE bool CherriesApplyYouTubeBinding(QString, bool, QVariantMap);
     bool cherriesWaiting = false;
     QPointer<QCheckBox> cherriesMainSelected;
 ''', count=2)
@@ -109,6 +116,12 @@ s = s[:marker] + s[marker:].replace('''    void CherriesHeader();
     void CherriesCard(QGroupBox *, obs_data_t *, bool, QPushButton *);
     void CherriesStartSelected();
     void CherriesStartExtras();
+    void CherriesBroadcastMenu();
+    bool CherriesCanStart(obs_data_t *);
+    void CherriesManageYouTube(obs_data_t *, bool, const QString &);
+    obs_output_t *CherriesGetOutput(obs_data_t *, bool);
+    QVariantMap CherriesBindingRequest(obs_data_t *);
+    Q_INVOKABLE bool CherriesApplyYouTubeBinding(QString, bool, QVariantMap);
     bool cherriesWaiting = false;
     QPointer<QCheckBox> cherriesMainSelected;
 ''', '')
@@ -132,6 +145,30 @@ change(multi / 'multistream.cpp', '\t\tmd->mainStreamButton->setIcon(md->streamA
        '\t\tmd->mainStreamButton->setIcon(md->streamActiveIcon);\n\t\tif (event == OBS_FRONTEND_EVENT_STREAMING_STARTED && md->cherriesWaiting) { md->cherriesWaiting = false; md->CherriesStartExtras(); }')
 with (multi / 'multistream.cpp').open('a') as f:
     f.write('\n#include "CherriesDestinations.inc"\n')
+    f.write('\n#include "CherriesYouTubeOutputs.inc"\n')
+shutil.copyfile(here / 'CherriesYouTubeOutputs.inc', multi / 'CherriesYouTubeOutputs.inc')
+
+# Compact destinations and a preview-only portrait canvas. Keep backing controls
+# alive under a hidden parent for hotkeys and Capture & Clips actions.
+for path, start_marker, end_marker in [
+    (multi / 'multistream.cpp', '\t// Contribute Button', '\tbuttonRow->addWidget(aitumButton);'),
+    (vertical / 'vertical-canvas.cpp', '\tauto aitumButtonGroupLayout =', '\tbuttonRow->addLayout(aitumButtonGroupLayout);')]:
+    text = path.read_text()
+    start = text.index(start_marker)
+    end = text.index(end_marker, start) + len(end_marker)
+    path.write_text(text[:start] + text[end:])
+change(vertical / 'vertical-canvas.cpp', '\tauto buttonRow = new QHBoxLayout(this);',
+       '\tauto hiddenControls = new QWidget(this);\n\thiddenControls->setObjectName("cherriesPortraitControls");\n\tauto buttonRow = new QHBoxLayout(hiddenControls);')
+change(vertical / 'vertical-canvas.cpp', '\tmainLayout->addLayout(buttonRow);', '\thiddenControls->hide();')
+change(vertical / 'vertical-canvas.cpp', '\tl->addWidget(enablePreviewButton);', '\tl->addWidget(enablePreviewButton);\n\tenablePreviewButton->hide();')
+change(vertical / 'vertical-canvas.cpp', '\tconst auto sceneRow = new QHBoxLayout(this);',
+       '\tauto hiddenScenes = new QWidget(this);\n\tconst auto sceneRow = new QHBoxLayout(hiddenScenes);')
+change(vertical / 'vertical-canvas.cpp', '\tmainLayout->insertLayout(0, sceneRow);', '\thiddenScenes->hide();')
+for label in ('mainCanvasLabel', 'verticalCanvasLabel'):
+    change(multi / 'multistream.cpp', f'\t{label}->setStyleSheet(canvasGroupHeaderStyle);',
+           f'\t{label}->hide();')
+change(multi / 'multistream.cpp', 'configButton->setText("Add / Edit Destinations");',
+       'configButton->setText("Add / Edit");')
 
 # User-facing names; internal module/procedure IDs stay compatible with the engines.
 for path, names in [(vertical, {'Vertical':'Portrait', 'VerticalSettings':'Portrait Settings', 'Backtrack':'Replay Clips'}),
@@ -147,3 +184,5 @@ for name in ('CMakeLists.txt', 'CherriesStudio.cpp'):
     shutil.copyfile(here / name, studio / name)
 with (root / 'plugins/CMakeLists.txt').open('a') as f:
     f.write('\nadd_subdirectory(vertical-canvas)\nadd_subdirectory(aitum-multistream)\nadd_subdirectory(cherries-studio)\nset_obs_core_modules()\n')
+
+subprocess.run([sys.executable, str(here / 'integrate-youtube.py'), str(root)], check=True)

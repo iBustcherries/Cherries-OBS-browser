@@ -13,19 +13,35 @@ Cherries Studio > Restore Mockup A Layout restores the initial arrangement.
 3. Assign a portrait scene to each landscape scene in Scene Pairs. Link scene
    changes can be disabled while editing or when independent switching is wanted.
 4. Add landscape and portrait destinations in Destinations > Add / Edit
-   Destinations. Additional endpoints use their platform stream server and key.
-   Two simultaneous YouTube broadcasts need distinct ingest destinations; an
-   account connection alone does not create two separate broadcasts.
+   Destinations. For YouTube, choose its preset and leave the key blank. Save,
+   then open Manage Broadcast and Create / select broadcast for that destination.
+   Reuse the main YouTube account or a previously saved channel, or connect a new
+   account without changing the main OBS service. Create a new broadcast using
+   OBS's native dialog, or select an existing one. Its ingest address and key
+   are applied automatically to that destination. Other platforms retain their
+   stream-server/key setup.
 5. Choose Include in Start Selected on the desired outputs. Shared landscape
    outputs wait for OBS's primary stream to actually start. An unchecked primary
    output is never silently started. Dedicated encoders can run independently.
 
 The OBS Account card uses the current native OBS service directly, including its
-account authorization. Additional destinations currently use the engines' stream
-key configuration. This does not add simultaneous native OAuth sessions for all
-destinations. Manage Broadcast opens the native Twitch stream-info dock (creating
-it on demand) or YouTube's broadcast setup dialog. A stream-key-only profile gets
-visible account-connection guidance. This action never starts or stops a stream.
+account authorization. Manage Broadcast lists additional YouTube destinations
+and retains access to the native main Twitch/YouTube controls. Each YouTube
+destination has create/select, edit title/description/privacy/schedule, Go live,
+and End broadcast actions. Channels are authorized once per OBS profile and can
+be reused by several destinations; their credentials stay in the profile, as
+with native OBS authorization. No tokens are passed to the multistream plugin.
+Creating or selecting a broadcast does not start any output. If a broadcast has
+automatic start disabled, start its encoder and then use Go live. End broadcast
+asks for confirmation and stops only that destination. A completed broadcast
+needs to be replaced/reselected before the next session, as appropriate on YouTube.
+
+Landscape and portrait assignments must use different ingest streams. Duplicate
+broadcast IDs, stream IDs, and stream keys are rejected across destinations and
+the main service. An active destination cannot be rebound. Additional broadcast
+dialogs use isolated API state and never update the main service's stream key,
+chat selection, broadcast ID, or remembered broadcast defaults. The compact-card
+layout is a separate design proposal and has not been applied in this release.
 
 ## Feature map
 
@@ -76,3 +92,5 @@ The Fedora workflow fetches these exact upstream revisions and applies
 `studio/integrate.py`. `engine.cmake` uses OBS's build and installation helpers.
 Internal module and websocket IDs retain upstream names for compatibility.
 Fork updates ship through the RPM rather than the upstream update service.
+
+Release 22 uses compact destination rows with expandable details. Portrait Canvas is preview-only; recording, replay and camera actions remain in Capture & Clips, with settings available from Portrait Settings. Donation and promotional buttons were removed from the two dock footers; engine copyright and GPL attribution remain intact.

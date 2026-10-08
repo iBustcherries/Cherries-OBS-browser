@@ -2,7 +2,7 @@
 void MultistreamDock::CherriesCard(QGroupBox *card, obs_data_t *settings, bool portrait, QPushButton *start)
 {
     auto layout = static_cast<QVBoxLayout *>(card->layout());
-    auto selected = new QCheckBox("Include in Start Selected", card);
+    auto selected = new QCheckBox(card);
     selected->setObjectName("cherriesSelected");
     const QString key = QString(portrait ? "Portrait/" : "Landscape/") +
         (settings ? QString::fromUtf8(obs_data_get_string(settings, "name")) : "OBS Account");
@@ -15,13 +15,48 @@ void MultistreamDock::CherriesCard(QGroupBox *card, obs_data_t *settings, bool p
         config_set_bool(config, "CherriesDestinations", key.toUtf8().constData(), checked);
         config_save_safe(config, "tmp", nullptr);
     });
-    layout->addWidget(selected);
+    selected->setToolTip("Include in Start Selected");
+    selected->setAccessibleName("Include destination in Start Selected");
+    layout->setContentsMargins(8, 6, 8, 6);
+    layout->setSpacing(3);
+    auto titleRow = static_cast<QHBoxLayout *>(layout->itemAt(0)->layout());
+    titleRow->insertWidget(0, selected);
+    start->setMinimumWidth(54);
+    start->setText("Start");
     auto detail = new QLabel(card);
     detail->setWordWrap(true);
     layout->addWidget(detail);
     auto status = new QLabel("Idle", card);
     status->setObjectName("cherriesOutputStatus");
-    layout->addWidget(status);
+    titleRow->insertWidget(titleRow->count() - 1, status);
+    auto expand = new QPushButton("Details", card);
+    expand->setObjectName("cherriesExpandDestination");
+    expand->setCheckable(true);
+    titleRow->addWidget(expand);
+    auto expanded = new QWidget(card);
+    expanded->setObjectName("cherriesDestinationDetails");
+    auto expandedLayout = new QVBoxLayout(expanded);
+    expandedLayout->setContentsMargins(0, 4, 0, 0);
+    auto encoder = new QLabel(expanded);
+    encoder->setWordWrap(true);
+    expandedLayout->addWidget(encoder);
+    if (settings) {
+        auto broadcast = new QPushButton("Edit broadcast", expanded);
+        expandedLayout->addWidget(broadcast);
+        broadcast->setVisible(QString::fromUtf8(obs_data_get_string(settings, "stream_server")).contains("youtube.com"));
+        connect(broadcast, &QPushButton::clicked, this, [this, settings, portrait] {
+            CherriesManageYouTube(settings, portrait, "configure");
+        });
+    }
+    auto options = new QPushButton("Output settings", expanded);
+    expandedLayout->addWidget(options);
+    connect(options, &QPushButton::clicked, this, [this] {
+        auto button = findChild<QPushButton *>("cherriesOutputSettings");
+        if (button) button->click();
+    });
+    layout->addWidget(expanded);
+    expanded->hide();
+    connect(expand, &QPushButton::toggled, expanded, &QWidget::setVisible);
     card->setProperty("cherriesPortrait", portrait);
     card->setProperty("cherriesShared", settings && !portrait &&
         (!obs_data_get_bool(settings, "advanced") || !*obs_data_get_string(settings, "video_encoder") ||
@@ -31,7 +66,7 @@ void MultistreamDock::CherriesCard(QGroupBox *card, obs_data_t *settings, bool p
         connect(card, &QObject::destroyed, this, [settings] { obs_data_release(settings); });
     }
     auto timer = new QTimer(card);
-    connect(timer, &QTimer::timeout, card, [this, card, settings, portrait, detail, status, start, selected, key] {
+    connect(timer, &QTimer::timeout, card, [this, card, settings, portrait, detail, encoder, status, start, selected, key] {
         if (exiting) return;
         auto config = obs_frontend_get_profile_config();
         config_set_default_bool(config,"CherriesDestinations",key.toUtf8().constData(),true);
@@ -44,8 +79,9 @@ void MultistreamDock::CherriesCard(QGroupBox *card, obs_data_t *settings, bool p
             output = obs_frontend_get_streaming_output(); release = true;
             auto service = obs_frontend_get_streaming_service();
             obs_data_t *s = service ? obs_service_get_settings(service) : nullptr;
-            detail->setText(QString("Landscape · %1\nUses OBS stream settings")
+            detail->setText(QString("Landscape · %1")
                 .arg(s ? QString::fromUtf8(obs_data_get_string(s, "service")) : "Configure an account"));
+            encoder->setText("Uses OBS stream settings");
             obs_data_release(s);
         } else {
             const char *name = obs_data_get_string(settings, "name");
@@ -60,8 +96,10 @@ void MultistreamDock::CherriesCard(QGroupBox *card, obs_data_t *settings, bool p
             }
             const bool customAudio = obs_data_get_bool(settings, "advanced") && *obs_data_get_string(settings, "audio_encoder");
             const QString audio = customAudio ? QString("Audio track %1").arg(obs_data_get_int(settings, "audio_track") + 1) : "Canvas audio settings";
-            detail->setText(QString("%1 · %2\n%3").arg(portrait ? "Portrait" : "Landscape", audio,
-                portrait ? "Portrait encoder" : card->property("cherriesShared").toBool() ? "Shares OBS encoder settings" : "Dedicated encoder"));
+            detail->setText(QString("%1 · %2").arg(portrait ? "Portrait" : "Landscape", audio));
+            encoder->setText(QString("%1\n%2").arg(
+                portrait ? "Portrait encoder" : card->property("cherriesShared").toBool() ? "Shares OBS encoder settings" : "Dedicated encoder",
+                QString::fromUtf8(obs_data_get_string(settings, "cherries_yt_title"))));
         }
         const bool active = output && obs_output_active(output);
         card->setProperty("cherriesActive", active);
@@ -90,6 +128,22 @@ void MultistreamDock::CherriesStartExtras()
 void MultistreamDock::CherriesStartSelected()
 {
     if (cherriesWaiting) return;
+    auto landscape = obs_data_get_array(current_config, "outputs");
+    bool ready = true;
+    for (auto pair : {std::make_pair(mainCanvasOutputLayout, landscape), std::make_pair(verticalCanvasOutputLayout, vertical_outputs)}) {
+        for (size_t i = 0; ready && i < obs_data_array_count(pair.second); ++i) {
+            auto entry = obs_data_array_item(pair.second, i);
+            for (int j = 0; j < pair.first->count(); ++j) {
+                auto card = pair.first->itemAt(j)->widget();
+                if (!card || card->objectName() != QString::fromUtf8(obs_data_get_string(entry, "name"))) continue;
+                auto selected = card->findChild<QCheckBox *>("cherriesSelected");
+                if (selected && selected->isChecked()) ready = CherriesCanStart(entry);
+            }
+            obs_data_release(entry);
+        }
+    }
+    obs_data_array_release(landscape);
+    if (!ready) return;
     bool needsMain = false;
     for (int i = 1; i < mainCanvasOutputLayout->count(); ++i) {
         auto card = mainCanvasOutputLayout->itemAt(i)->widget();
@@ -115,15 +169,11 @@ void MultistreamDock::CherriesStartSelected()
 void MultistreamDock::CherriesHeader()
 {
     auto header = new QWidget(this);
-    auto layout = new QVBoxLayout(header);
+    auto layout = new QHBoxLayout(header);
     layout->setContentsMargins(4, 4, 4, 8);
     auto manage = new QPushButton("Manage Broadcast", header);
     manage->setObjectName("cherriesManageBroadcast");
-    connect(manage, &QPushButton::clicked, this, [] {
-        auto main = static_cast<QMainWindow *>(obs_frontend_get_main_window());
-        if (!QMetaObject::invokeMethod(main, "CherriesManageBroadcast", Qt::QueuedConnection))
-            QMessageBox::warning(main, "Manage Broadcast", "The broadcast action is unavailable. Please update the complete Cherries OBS package.");
-    });
+    connect(manage, &QPushButton::clicked, this, &MultistreamDock::CherriesBroadcastMenu);
     layout->addWidget(manage);
     auto start = new QPushButton("Start Selected", header);
     start->setObjectName("cherriesStartSelected");
@@ -143,7 +193,10 @@ void MultistreamDock::CherriesHeader()
         }
         if (obs_frontend_streaming_active()) obs_frontend_streaming_stop();
     });
-    layout->addWidget(stop);
+    stop->setText("Stop All");
+    stop->setObjectName("cherriesStopAll");
+    auto footer = qobject_cast<QHBoxLayout *>(mainLayout->itemAt(mainLayout->count() - 1)->layout());
+    if (footer) footer->addWidget(stop); else layout->addWidget(stop);
     mainLayout->insertWidget(0, header);
     setMinimumWidth(290);
 }

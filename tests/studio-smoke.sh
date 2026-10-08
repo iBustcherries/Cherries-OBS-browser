@@ -38,6 +38,18 @@ timeout 100s /opt/cherries-obs/bin/obs --disable-shutdown-check --disable-update
 cat "$CHERRIES_TEST_ARTIFACTS/obs.log"
 test "$result" = 0
 test -f "$CHERRIES_TEST_ARTIFACTS/studio-pass.txt"
+python3 - <<'PY'
+import json,os,pathlib
+r=pathlib.Path(os.environ['XDG_CONFIG_HOME'])/'obs-studio/plugin_config'
+main=json.loads((r/'aitum-multistream/config.json').read_text())['profiles'][0]['outputs'][0]
+portrait=json.loads((r/'vertical-canvas/config.json').read_text())['canvas'][0]['stream_outputs'][0]
+assert main['cherries_yt_broadcast_id']=='landscape-test'
+assert portrait['cherries_yt_broadcast_id']=='portrait-test'
+assert main['cherries_yt_account_id']==portrait['cherries_yt_account_id']=='test-channel'
+assert main['cherries_yt_stream_id']!=portrait['cherries_yt_stream_id']
+assert main['stream_key']=='shared' and portrait['stream_key']=='portrait'
+print('Destination bindings persist independently and share one account identity')
+PY
 for name in main shared portrait; do
     ffprobe -v error -show_entries stream=codec_type,width,height -of json "$CHERRIES_TEST_ARTIFACTS/$name.flv" > "$CHERRIES_TEST_ARTIFACTS/$name-streams.json"
     ffmpeg -nostdin -i "$CHERRIES_TEST_ARTIFACTS/$name.flv" -vn -af volumedetect -f null - > "$CHERRIES_TEST_ARTIFACTS/$name-volume.txt" 2>&1
