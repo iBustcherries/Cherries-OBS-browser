@@ -4,8 +4,8 @@
 
 Name: cherries-obs-wayland
 Version: 0.1
-Release: 23.experimental%{?dist}
-Summary: Experimental OBS build with Wayland browser docks
+Release: 24.experimental%{?dist}
+Summary: Cherries OBS streaming and recording with Wayland browser docks
 License: GPL-2.0-or-later AND BSD-3-Clause
 URL: https://github.com/iBustcherries/Cherries-OBS-browser
 Requires: fontconfig
@@ -31,6 +31,7 @@ DevTools and full IME support are incomplete.
 %install
 mkdir -p %{buildroot}/opt %{buildroot}/usr/bin %{buildroot}/usr/share/applications
 cp -a %{stage_dir}/opt/cherries-obs %{buildroot}/opt/
+install -Dm0644 %{stage_dir}/../browser-fork/packaging/branding/cherries-obs.png %{buildroot}/usr/share/pixmaps/cherries-obs.png
 install -m 0755 %{stage_dir}/../browser-fork/packaging/gamecapture/cherries-gamecapture %{buildroot}/usr/bin/cherries-gamecapture
 install -m 0755 %{stage_dir}/../browser-fork/packaging/gamecapture/cherries-steam %{buildroot}/usr/bin/cherries-steam
 cat > %{buildroot}/usr/share/applications/cherries-steam.desktop <<'EOF'
@@ -55,10 +56,10 @@ chmod 0755 %{buildroot}/usr/bin/cherries-obs-wayland
 cat > %{buildroot}/usr/share/applications/cherries-obs-wayland.desktop <<'EOF'
 [Desktop Entry]
 Type=Application
-Name=Cherries OBS (Experimental Wayland)
-Comment=OBS with experimental Wayland browser docks
+Name=Cherries OBS
+Comment=Stream and record with Cherries OBS
 Exec=cherries-obs-wayland
-Icon=com.obsproject.Studio
+Icon=cherries-obs
 Terminal=false
 Categories=AudioVideo;Recorder;
 EOF
@@ -70,3 +71,5 @@ EOF
 /usr/bin/cherries-steam
 /usr/share/applications/cherries-steam.desktop
 /usr/share/applications/cherries-obs-wayland.desktop
+
+/usr/share/pixmaps/cherries-obs.png

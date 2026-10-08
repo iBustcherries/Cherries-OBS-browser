@@ -151,10 +151,10 @@ public:
         if (auto d=dock("VerticalCanvasDockScenes")) d->setWindowTitle("Portrait Scenes");
         if (auto d=dock("VerticalCanvasDockSources")) d->setWindowTitle("Portrait Sources");
         if (auto d=dock("sourcesDock")) d->setWindowTitle("Landscape Sources");
-        auto toolbar = new QToolBar("Cherries Studio",main);
+        auto toolbar = new QToolBar("Cherries OBS",main);
         toolbar->setObjectName("cherriesStudioToolbar"); toolbar->setMovable(false);
         main->addToolBar(Qt::TopToolBarArea,toolbar);
-        toolbar->addWidget(new QLabel("  Cherries Studio  "));
+        toolbar->addWidget(new QLabel("  Cherries OBS  "));
         auto a=toolbar->addAction("Canvases"); connect(a,&QAction::triggered,this,[this]{reveal(vertical);});
         a=toolbar->addAction("Destinations"); connect(a,&QAction::triggered,this,[this]{reveal(destinations);});
         a=toolbar->addAction("Recording"); connect(a,&QAction::triggered,this,[this]{reveal(clips);});
@@ -215,10 +215,10 @@ public:
         obs_frontend_add_dock_by_id("cherriesCaptureDock","Capture & Clips",capture);
         clips=dock("cherriesCaptureDock");
 
-        auto menu=main->menuBar()->addMenu("Cherries Studio");
+        auto menu=main->menuBar()->addMenu("Cherries OBS");
         a=menu->addAction("Restore Mockup A Layout"); connect(a,&QAction::triggered,this,[this]{arrange();});
-        a=menu->addAction("About Cherries Studio"); connect(a,&QAction::triggered,this,[this]{
-            QMessageBox::about(main,"Cherries Studio","Cherries Studio integrates canvas and streaming tools into OBS.\n\nCanvas and multistream engines derived from Aitum Vertical and Aitum Multistream. Copyright their respective contributors. GPL-2.0.\n\nSource and build instructions: github.com/iBustcherries/Cherries-OBS-browser");
+        a=menu->addAction("About Cherries OBS"); connect(a,&QAction::triggered,this,[this]{
+            QMessageBox::about(main,"Cherries OBS","Cherries OBS integrates canvas and streaming tools into OBS.\n\nCanvas and multistream engines derived from Aitum Vertical and Aitum Multistream. Copyright their respective contributors. GPL-2.0.\n\nSource and build instructions: github.com/iBustcherries/Cherries-OBS-browser");
         });
         connect(&refresh,&QTimer::timeout,this,[this,record,recordingStatus]{
             updatePairs();

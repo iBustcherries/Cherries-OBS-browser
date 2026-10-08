@@ -107,6 +107,7 @@ jobs:
           printf '%s\n' 'add_subdirectory(cherries-gamecapture)' 'target_enable(linux-vkcapture)' 'set_obs_core_modules()' >> obs/plugins/CMakeLists.txt
           python3 browser-fork/packaging/configure-twitch-client.py obs/frontend/oauth/CherriesTwitchClient.hpp
           python3 browser-fork/packaging/studio/integrate.py obs
+          python3 browser-fork/packaging/branding/integrate.py obs
           mkdir -p obs/.deps/cef
           curl -fL -o obs/.deps/cef.tar.xz https://cdn-fastly.obsproject.com/downloads/cef_binary_7871_linux_x86_64.tar.xz
           echo '8ffc64d06ea74da613eeda7f2aa5d4e98661af6fa3ed8c68724c9a6e4e89ea8e  obs/.deps/cef.tar.xz' | sha256sum -c -

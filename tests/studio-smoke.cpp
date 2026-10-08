@@ -3,6 +3,7 @@
 #include <obs-frontend-api.h>
 #include <util/platform.h>
 #include <QApplication>
+#include <QImage>
 #include <QDockWidget>
 #include <QMainWindow>
 #include <QPushButton>
@@ -77,6 +78,11 @@ static void verifyStreams() {
 
 static void run() {
     require(window->findChild<QObject *>("cherriesStudioController"),"workspace controller loaded");
+    require(QApplication::applicationDisplayName()=="Cherries OBS", "application display name is Cherries OBS");
+    require(QApplication::desktopFileName()=="cherries-obs-wayland", "Wayland identity matches installed launcher");
+    require(window->windowTitle().startsWith("Cherries OBS "), "main window uses Cherries OBS branding");
+    const QImage bundledLogo(":/res/images/obs.png"), installedLogo("/usr/share/pixmaps/cherries-obs.png");
+    require(!bundledLogo.isNull() && bundledLogo==installedLogo, "embedded app logo matches the installed cherry logo");
     auto dock=window->findChild<QDockWidget *>("VerticalCanvasDock");
     auto dest=window->findChild<QDockWidget *>("AitumMultistreamDock");
     require(dock&&dest&&window->findChild<QTableWidget *>("cherriesScenePairs"),"portrait, destinations and scene-pair controls exist");
