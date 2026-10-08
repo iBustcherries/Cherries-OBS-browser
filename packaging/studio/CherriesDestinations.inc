@@ -21,7 +21,7 @@ void MultistreamDock::CherriesCard(QGroupBox *card, obs_data_t *settings, bool p
     layout->setSpacing(3);
     auto titleRow = static_cast<QHBoxLayout *>(layout->itemAt(0)->layout());
     titleRow->insertWidget(0, selected);
-    start->setMinimumWidth(54);
+    start->setMinimumWidth(78);
     start->setText("Start");
     auto detail = new QLabel(card);
     detail->setWordWrap(true);
@@ -198,5 +198,5 @@ void MultistreamDock::CherriesHeader()
     auto footer = qobject_cast<QHBoxLayout *>(mainLayout->itemAt(mainLayout->count() - 1)->layout());
     if (footer) footer->addWidget(stop); else layout->addWidget(stop);
     mainLayout->insertWidget(0, header);
-    setMinimumWidth(290);
+    setMinimumWidth(360);
 }

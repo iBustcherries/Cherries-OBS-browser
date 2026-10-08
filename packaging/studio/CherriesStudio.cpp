@@ -132,11 +132,11 @@ class Studio : public QObject {
         if (sources && portraitSources) { main->tabifyDockWidget(sources,portraitSources); sources->raise(); }
         if (transitions && portraitTransitions) main->tabifyDockWidget(transitions,portraitTransitions);
         if (pairs) {
-            main->addDockWidget(Qt::BottomDockWidgetArea,pairs); pairs->setFloating(false); pairs->setFloating(false);
+            main->addDockWidget(Qt::BottomDockWidgetArea,pairs); pairs->setFloating(false);
             if (scenes) main->tabifyDockWidget(scenes,pairs);
             pairs->show(); pairs->raise();
         }
-        if (clips) { main->addDockWidget(Qt::BottomDockWidgetArea,clips); clips->setFloating(false); clips->setFloating(false); clips->show(); }
+        if (clips) { main->addDockWidget(Qt::BottomDockWidgetArea,clips); clips->setFloating(false); clips->show(); }
         if (vertical && destinations) main->resizeDocks({vertical,destinations},{300,330},Qt::Horizontal);
     }
 public:
@@ -147,6 +147,7 @@ public:
             blog(LOG_ERROR,"[Cherries Studio] Required canvas/output engine did not load"); return;
         }
         vertical->setWindowTitle("Portrait Canvas"); destinations->setWindowTitle("Destinations");
+        vertical->setMinimumWidth(200);
         if (auto d=dock("VerticalCanvasDockScenes")) d->setWindowTitle("Portrait Scenes");
         if (auto d=dock("VerticalCanvasDockSources")) d->setWindowTitle("Portrait Sources");
         if (auto d=dock("sourcesDock")) d->setWindowTitle("Landscape Sources");

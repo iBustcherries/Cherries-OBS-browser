@@ -81,6 +81,7 @@ static void run() {
     auto dest=window->findChild<QDockWidget *>("AitumMultistreamDock");
     require(dock&&dest&&window->findChild<QTableWidget *>("cherriesScenePairs"),"portrait, destinations and scene-pair controls exist");
     auto hiddenControls=dock->findChild<QWidget *>("cherriesPortraitControls");
+    require(dock->minimumWidth()>=200,"portrait preview retains a usable minimum width");
     require(hiddenControls&&hiddenControls->isHidden(),"portrait control strip is hidden");
     for (auto button : dock->widget()->findChildren<QAbstractButton *>())
         require(!button->isVisibleTo(dock->widget()),"portrait canvas has no visible buttons");

@@ -148,6 +148,7 @@ with (multi / 'multistream.cpp').open('a') as f:
     f.write('\n#include "CherriesYouTubeOutputs.inc"\n')
 shutil.copyfile(here / 'CherriesYouTubeOutputs.inc', multi / 'CherriesYouTubeOutputs.inc')
 
+change(multi / 'multistream.cpp', 'auto outputPlatformIconSize = 36;', 'auto outputPlatformIconSize = 24;')
 # Compact destinations and a preview-only portrait canvas. Keep backing controls
 # alive under a hidden parent for hotkeys and Capture & Clips actions.
 for path, start_marker, end_marker in [
