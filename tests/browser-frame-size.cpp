@@ -15,6 +15,13 @@ int main()
 		// An old viewport frame must not acquire the new viewport's DPI/size.
 		assert(CopyBrowserFrame(buffer.constBits(), physical, QSize(70, 40), scale).isNull());
 
+		// A slightly delayed frame remains usable during continuous resizing,
+        // but only at a recently requested size and the current DPI.
+        std::deque<QSize> recent{QSize(70, 40), logical};
+        assert(!CopyRecentBrowserFrame(buffer.constBits(), physical, recent, scale).isNull());
+        assert(CopyRecentBrowserFrame(buffer.constBits(), physical, {QSize(70,40)}, scale).isNull());
+        assert(CopyRecentBrowserFrame(buffer.constBits(), physical, recent, scale * 3).isNull());
+
 		// Changing the canvas size must preserve the frame's logical extent.
 		// Also exercise a popup's offset and painting to a high-DPI target.
 		for (QSize canvasSize : {QSize(80, 60), QSize(25, 20)}) {

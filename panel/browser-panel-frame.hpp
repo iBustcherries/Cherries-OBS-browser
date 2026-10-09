@@ -4,6 +4,7 @@
 #include <QPainter>
 #include <QSize>
 #include <cmath>
+#include <deque>
 
 inline QImage CopyBrowserFrame(const void *buffer, QSize pixels, QSize logicalSize, qreal scale)
 {
@@ -27,4 +28,17 @@ inline void PaintBrowserFrame(QPainter &painter, QPointF origin, const QImage &f
 	// fills newly exposed space until CEF renders the resized viewport.
 	if (!frame.isNull())
 		painter.drawImage(origin, frame);
+}
+
+// During a drag, CEF may deliver a completed frame just after the next resize.
+// Preserve its actual logical extent instead of dropping it or stretching it.
+inline QImage CopyRecentBrowserFrame(const void *buffer, QSize pixels,
+                                    const std::deque<QSize> &viewports, qreal scale)
+{
+    for (const auto &size : viewports) {
+        auto frame = CopyBrowserFrame(buffer, pixels, size, scale);
+        if (!frame.isNull())
+            return frame;
+    }
+    return {};
 }

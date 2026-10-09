@@ -136,19 +136,47 @@ void QCefWidgetInternal::updateOSRGeometry()
 {
 	if (!osrState)
 		return;
+	// Throttle while dragging, rather than restarting a debounce indefinitely.
+	if (!geometryTimer.isActive())
+		geometryTimer.start();
+	resizeSettledTimer.start();
+}
+
+void QCefWidgetInternal::flushOSRGeometry()
+{
+	if (!osrState)
+		return;
+	bool scaleChanged;
 	{
 		std::lock_guard<std::mutex> lock(osrState->mutex);
+		scaleChanged = osrState->scale != devicePixelRatioF();
 		osrState->width = std::max(1, width());
 		osrState->height = std::max(1, height());
 		osrState->scale = devicePixelRatioF();
+		if (scaleChanged)
+			osrState->recentViewports.clear();
+		QSize viewport(osrState->width, osrState->height);
+		if (osrState->recentViewports.empty() || osrState->recentViewports.front() != viewport)
+			osrState->recentViewports.push_front(viewport);
+		while (osrState->recentViewports.size() > 8)
+			osrState->recentViewports.pop_back();
 	}
 	if (cefBrowser) {
 		auto host = cefBrowser->GetHost();
-		QueueCEFTask([host]() {
-			host->NotifyScreenInfoChanged();
+		auto state = osrState;
+		// At most one pending resize task per dock, even if CEF is busy.
+		if (scaleChanged)
+			state->screenInfoDirty = true;
+		if (state->resizePending.exchange(true))
+			return;
+		if (!QueueCEFTask([host, state]() {
+			state->resizePending = false;
+			if (state->screenInfoDirty.exchange(false))
+				host->NotifyScreenInfoChanged();
 			host->WasResized();
 			host->Invalidate(PET_VIEW);
-		});
+		}))
+			state->resizePending = false;
 	}
 }
 
@@ -180,6 +208,8 @@ void QCefWidgetInternal::hideEvent(QHideEvent *event)
 	QWidget::hideEvent(event);
 	if (windowless) {
 		paintTimer.stop();
+		geometryTimer.stop();
+		resizeSettledTimer.stop();
 		if (cefBrowser) {
 			auto host = cefBrowser->GetHost();
 			QueueCEFTask([host]() { host->WasHidden(true); });

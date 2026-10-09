@@ -176,7 +176,13 @@ QCefWidgetInternal::QCefWidgetInternal(QWidget *parent, const std::string &url_,
 		setFocusPolicy(Qt::StrongFocus);
 		setMouseTracking(true);
 		setAttribute(Qt::WA_InputMethodEnabled);
-		updateOSRGeometry();
+		geometryTimer.setSingleShot(true);
+		geometryTimer.setInterval(33);
+		connect(&geometryTimer, &QTimer::timeout, this, &QCefWidgetInternal::flushOSRGeometry);
+		resizeSettledTimer.setSingleShot(true);
+		resizeSettledTimer.setInterval(100);
+		connect(&resizeSettledTimer, &QTimer::timeout, this, &QCefWidgetInternal::flushOSRGeometry);
+		flushOSRGeometry();
 		connect(&paintTimer, &QTimer::timeout, this, [this]() {
 			auto shape = Qt::ArrowCursor;
 			switch (osrState->cursor.load()) {
@@ -209,7 +215,7 @@ QCefWidgetInternal::QCefWidgetInternal(QWidget *parent, const std::string &url_,
 			if (dirty)
 				update();
 		});
-		paintTimer.start(33);
+		paintTimer.start(16);
 		return;
 	}
 
@@ -484,7 +490,7 @@ void QCefWidgetInternal::showEvent(QShowEvent *event)
 {
 	QWidget::showEvent(event);
 	if (windowless) {
-		paintTimer.start(33);
+		paintTimer.start(16);
 		updateOSRGeometry();
 		if (cefBrowser) {
 			auto host = cefBrowser->GetHost();

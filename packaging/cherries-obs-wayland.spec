@@ -4,7 +4,7 @@
 
 Name: cherries-obs-wayland
 Version: 0.1
-Release: 24.experimental%{?dist}
+Release: 25.experimental%{?dist}
 Summary: Cherries OBS streaming and recording with Wayland browser docks
 License: GPL-2.0-or-later AND BSD-3-Clause
 URL: https://github.com/iBustcherries/Cherries-OBS-browser
@@ -50,7 +50,7 @@ umask 077
 export QT_QPA_PLATFORM=wayland
 export CHERRIES_HOST_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}/cherries-obs-experimental"
-exec /opt/cherries-obs/bin/obs "$@"
+exec /opt/cherries-obs/bin/obs --desktop-file-name=cherries-obs-wayland "$@"
 EOF
 chmod 0755 %{buildroot}/usr/bin/cherries-obs-wayland
 cat > %{buildroot}/usr/share/applications/cherries-obs-wayland.desktop <<'EOF'
@@ -59,7 +59,8 @@ Type=Application
 Name=Cherries OBS
 Comment=Stream and record with Cherries OBS
 Exec=cherries-obs-wayland
-Icon=cherries-obs
+Icon=/usr/share/pixmaps/cherries-obs.png
+StartupWMClass=cherries-obs-wayland
 Terminal=false
 Categories=AudioVideo;Recorder;
 EOF

@@ -45,6 +45,9 @@ public:
 	bool windowless = false;
 	std::shared_ptr<QCefOSRState> osrState;
 	QTimer paintTimer;
+	QTimer geometryTimer;
+	QTimer resizeSettledTimer;
+	void flushOSRGeometry();
 
 	void paintEvent(QPaintEvent *event) override;
 	void hideEvent(QHideEvent *event) override;

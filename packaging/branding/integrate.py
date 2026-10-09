@@ -25,7 +25,9 @@ shutil.copyfile(here / 'CherriesBranding.hpp', root / 'frontend/widgets/Cherries
 change('frontend/widgets/OBSBasic.hpp', '#pragma once', '#pragma once\n#include "CherriesBranding.hpp"')
 for file in ('frontend/OBSApp.cpp', 'frontend/widgets/OBSBasicStats.cpp', 'frontend/widgets/OBSProjector.cpp'):
     change(file, 'QIcon::fromTheme("obs", QIcon(":/res/images/obs.png"))',
-           'QIcon::fromTheme("cherries-obs", QIcon(":/res/images/obs.png"))')
+           'QIcon(":/res/images/obs.png")')
+change('frontend/OBSApp.cpp', 'installNativeEventFilter(new OBS::NativeEventFilter);',
+       'setDesktopFileName("cherries-obs-wayland");\n\tinstallNativeEventFilter(new OBS::NativeEventFilter);')
 change('frontend/OBSApp.cpp', 'setDesktopFileName("com.obsproject.Studio");',
        'setDesktopFileName("cherries-obs-wayland");\n\tsetApplicationDisplayName("Cherries OBS");')
 change('frontend/widgets/OBSBasic.cpp', 'name << "OBS "', 'name << "Cherries OBS "', count=2)

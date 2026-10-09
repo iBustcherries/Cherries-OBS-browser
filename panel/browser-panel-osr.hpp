@@ -11,10 +11,13 @@
 struct QCefOSRState {
 	std::mutex mutex;
 	QImage view;
+	std::deque<QSize> recentViewports;
 	QImage popup;
 	CefRect popupRect;
 	bool popupVisible = false;
 	bool dirty = false;
+	std::atomic<bool> resizePending{false};
+	std::atomic<bool> screenInfoDirty{true};
 	int width = 1;
 	int height = 1;
 	float scale = 1.0f;
@@ -53,7 +56,9 @@ public:
 						      : QSize(state->width, state->height);
 		// CEF owns buffer only for this callback. Copy before returning, with
 		// geometry and DPI from one coherent viewport snapshot.
-		QImage frame = CopyBrowserFrame(buffer, QSize(width, height), logicalSize, state->scale);
+		QImage frame = type == PET_POPUP
+			? CopyBrowserFrame(buffer, QSize(width, height), logicalSize, state->scale)
+			: CopyRecentBrowserFrame(buffer, QSize(width, height), state->recentViewports, state->scale);
 		if (frame.isNull())
 			return;
 		(type == PET_POPUP ? state->popup : state->view) = std::move(frame);
