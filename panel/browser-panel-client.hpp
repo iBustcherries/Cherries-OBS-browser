@@ -24,6 +24,8 @@ public:
 		  script(script_),
 		  allowAllPopups(allowAllPopups_)
 	{
+		if (widget_->windowless)
+			renderHandler = new QCefOSRRenderHandler(widget_->osrState);
 	}
 
 	/* CefClient */
@@ -38,6 +40,7 @@ public:
 	virtual CefRefPtr<CefFocusHandler> GetFocusHandler() override;
 	virtual CefRefPtr<CefContextMenuHandler> GetContextMenuHandler() override;
 	virtual CefRefPtr<CefJSDialogHandler> GetJSDialogHandler() override;
+	CefRefPtr<CefRenderHandler> GetRenderHandler() override { return renderHandler; }
 
 	/* CefCommandHandler */
 #if CHROME_VERSION_BUILD >= 6533
@@ -47,6 +50,8 @@ public:
 
 	/* CefDisplayHandler */
 	virtual void OnTitleChange(CefRefPtr<CefBrowser> browser, const CefString &title) override;
+	bool OnCursorChange(CefRefPtr<CefBrowser>, CefCursorHandle, cef_cursor_type_t type,
+			    const CefCursorInfo &) override;
 
 	/* CefRequestHandler */
 	virtual bool OnBeforeBrowse(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame,
@@ -82,7 +87,7 @@ public:
 					 CefRefPtr<CefContextMenuParams> params,
 					 CefRefPtr<CefMenuModel> model) override;
 
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(__linux__)
 	virtual bool RunContextMenu(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame,
 				    CefRefPtr<CefContextMenuParams> params, CefRefPtr<CefMenuModel> model,
 				    CefRefPtr<CefRunContextMenuCallback> callback) override;
@@ -111,6 +116,7 @@ public:
 	QCefWidgetInternal *widget = nullptr;
 	std::string script;
 	bool allowAllPopups;
+	CefRefPtr<CefRenderHandler> renderHandler;
 
 	IMPLEMENT_REFCOUNTING(QCefBrowserClient);
 };

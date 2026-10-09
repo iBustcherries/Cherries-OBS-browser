@@ -4,6 +4,7 @@
 #include <QPointer>
 #include "browser-panel.hpp"
 #include "cef-headers.hpp"
+#include "browser-panel-osr.hpp"
 
 #include <vector>
 #include <mutex>
@@ -18,6 +19,9 @@ struct PopupWhitelistInfo {
 extern std::mutex popup_whitelist_mutex;
 extern std::vector<PopupWhitelistInfo> popup_whitelist;
 extern std::vector<PopupWhitelistInfo> forced_popups;
+
+// Read the native clipboard on the Qt GUI thread, then insert on the CEF thread.
+void PasteBrowserClipboard(CefRefPtr<CefBrowserHost> host);
 
 /* ------------------------------------------------------------------------- */
 
@@ -38,6 +42,31 @@ public:
 	QPointer<QWidget> container;
 #endif
 	bool allowAllPopups_ = false;
+	bool windowless = false;
+	std::shared_ptr<QCefOSRState> osrState;
+	QTimer paintTimer;
+	QTimer geometryTimer;
+	QTimer resizeSettledTimer;
+	void flushOSRGeometry();
+
+	void paintEvent(QPaintEvent *event) override;
+	void hideEvent(QHideEvent *event) override;
+	void mousePressEvent(QMouseEvent *event) override;
+	void mouseReleaseEvent(QMouseEvent *event) override;
+	void mouseDoubleClickEvent(QMouseEvent *event) override;
+	void mouseMoveEvent(QMouseEvent *event) override;
+	void leaveEvent(QEvent *event) override;
+	void wheelEvent(QWheelEvent *event) override;
+	void keyPressEvent(QKeyEvent *event) override;
+	void keyReleaseEvent(QKeyEvent *event) override;
+	void focusInEvent(QFocusEvent *event) override;
+	void focusOutEvent(QFocusEvent *event) override;
+	void inputMethodEvent(QInputMethodEvent *event) override;
+	QVariant inputMethodQuery(Qt::InputMethodQuery query) const override;
+	bool event(QEvent *event) override;
+	void updateOSRGeometry();
+	void sendMouseClick(QMouseEvent *event, bool release, int count);
+	void sendKey(QKeyEvent *event, bool release);
 
 	virtual void resizeEvent(QResizeEvent *event) override;
 	virtual void showEvent(QShowEvent *event) override;

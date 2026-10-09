@@ -108,6 +108,11 @@ public:
 
 bool QueueCEFTask(std::function<void()> task)
 {
+	/* CEF configures its API version during CefInitialize. Posting a task
+	 * before that completes can trigger a fatal version check in libcef. */
+	if (!cef_started_event || os_event_try(cef_started_event) != 0)
+		return false;
+
 	return CefPostTask(TID_UI, CefRefPtr<BrowserTask>(new BrowserTask(task)));
 }
 

@@ -1,0 +1,390 @@
+diff --git a/frontend/cmake/feature-youtube.cmake b/frontend/cmake/feature-youtube.cmake
+index be87b50..f0f5eb1 100644
+--- a/frontend/cmake/feature-youtube.cmake
++++ b/frontend/cmake/feature-youtube.cmake
+@@ -1,10 +1,6 @@
+-if(
+-  YOUTUBE_CLIENTID
+-  AND YOUTUBE_SECRET
+-  AND YOUTUBE_CLIENTID_HASH MATCHES "^(0|[a-fA-F0-9]+)$"
+-  AND YOUTUBE_SECRET_HASH MATCHES "^(0|[a-fA-F0-9]+)$"
+-  AND TARGET OBS::browser-panels
+-)
++if(TARGET OBS::browser-panels)
++  set(YOUTUBE_CLIENTID_HASH 0)
++  set(YOUTUBE_SECRET_HASH 0)
+   target_sources(
+     obs-studio
+     PRIVATE
+diff --git a/frontend/oauth/AuthListener.cpp b/frontend/oauth/AuthListener.cpp
+index 1c955cc..ff22acc 100644
+--- a/frontend/oauth/AuthListener.cpp
++++ b/frontend/oauth/AuthListener.cpp
+@@ -4,7 +4,8 @@
+ 
+ #include <qt-wrappers.hpp>
+ 
+-#include <QRegularExpression>
++#include "CherriesYouTubeProtocol.hpp"
++#include <QTimer>
+ #include <QTcpServer>
+ #include <QTcpSocket>
+ 
+@@ -12,14 +13,6 @@
+ 
+ #define LOGO_URL "https://obsproject.com/assets/images/new_icon_small-r.png"
+ 
+-static const QString serverResponseHeader = QStringLiteral("HTTP/1.0 200 OK\n"
+-							   "Connection: close\n"
+-							   "Content-Type: text/html; charset=UTF-8\n"
+-							   "Server: OBS Studio\n"
+-							   "\n"
+-							   "<html><head><title>OBS Studio"
+-							   "</title></head>");
+-
+ static const QString responseTemplate = "<center>"
+ 					"<img src=\"" LOGO_URL
+ 					"\" alt=\"OBS\" class=\"center\"  height=\"60\" width=\"60\">"
+@@ -51,57 +44,41 @@ void AuthListener::SetState(QString state)
+ void AuthListener::NewConnection()
+ {
+ 	QTcpSocket *socket = server->nextPendingConnection();
+-	if (socket) {
+-		connect(socket, &QTcpSocket::disconnected, socket, &QTcpSocket::deleteLater);
+-		connect(socket, &QTcpSocket::readyRead, socket, [&, socket]() {
+-			QByteArray buffer;
+-			while (socket->bytesAvailable() > 0) {
+-				buffer.append(socket->readAll());
+-			}
+-			socket->write(QT_TO_UTF8(serverResponseHeader));
+-			QString redirect = QString::fromLatin1(buffer);
+-			blog(LOG_DEBUG, "redirect: %s", QT_TO_UTF8(redirect));
+-
+-			QRegularExpression re_state("(&|\\?)state=(?<state>[^&]+)");
+-			QRegularExpression re_code("(&|\\?)code=(?<code>[^&]+)");
+-
+-			QRegularExpressionMatch match = re_state.match(redirect);
+-
+-			QString code;
+-
+-			if (match.hasMatch()) {
+-				if (state == match.captured("state")) {
+-					match = re_code.match(redirect);
+-					if (!match.hasMatch()) {
+-						blog(LOG_DEBUG, "no 'code' "
+-								"in server "
+-								"redirect");
+-					}
+-
+-					code = match.captured("code");
+-				} else {
+-					blog(LOG_WARNING, "state mismatch "
+-							  "while handling "
+-							  "redirect");
+-				}
+-			} else {
+-				blog(LOG_DEBUG, "no 'state' in "
+-						"server redirect");
+-			}
+-
+-			if (code.isEmpty()) {
+-				auto data = responseTemplate.arg(QTStr("YouTube.Auth.NoCode"));
+-				socket->write(QT_TO_UTF8(data));
+-				emit fail();
+-			} else {
+-				auto data = responseTemplate.arg(QTStr("YouTube.Auth.Ok"));
+-				socket->write(QT_TO_UTF8(data));
+-				emit ok(code);
+-			}
+-			socket->flush();
+-			socket->close();
+-		});
+-	} else {
+-		emit fail();
++	if (!socket) {
++		return;
+ 	}
++	connect(socket, &QTcpSocket::disconnected, socket, &QTcpSocket::deleteLater);
++	QTimer::singleShot(10000, socket, [socket]() { socket->abort(); });
++	connect(socket, &QTcpSocket::readyRead, this, [this, socket, buffer = QByteArray()]() mutable {
++		buffer += socket->readAll();
++		if (buffer.size() > 16384) {
++			socket->abort();
++			return;
++		}
++		if (!buffer.contains("\r\n\r\n")) {
++			return;
++		}
++		QString code;
++		const auto result = CherriesParseYouTubeRedirect(buffer, state, code);
++		if (result == CherriesYouTubeReply::Ignore) {
++			socket->write("HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
++		} else {
++			const QByteArray body =
++				responseTemplate
++					.arg(QTStr(result == CherriesYouTubeReply::Authorized ? "YouTube.Auth.Ok"
++											      : "YouTube.Auth.NoCode"))
++					.toUtf8();
++			socket->write(
++				"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Length: " +
++				QByteArray::number(body.size()) + "\r\n\r\n" + body);
++		}
++		socket->disconnectFromHost();
++		if (result == CherriesYouTubeReply::Authorized) {
++			server->close();
++			emit ok(code);
++		} else if (result == CherriesYouTubeReply::Denied) {
++			server->close();
++			emit fail();
++		}
++	});
+ }
+diff --git a/frontend/oauth/OAuth.cpp b/frontend/oauth/OAuth.cpp
+index aead7c0..af2931f 100644
+--- a/frontend/oauth/OAuth.cpp
++++ b/frontend/oauth/OAuth.cpp
+@@ -6,6 +6,7 @@
+ #include <qt-wrappers.hpp>
+ 
+ #include <QMessageBox>
++#include <QUrl>
+ #include <json11.hpp>
+ 
+ #include "moc_OAuth.cpp"
+@@ -83,9 +84,10 @@ bool OAuth::TokenExpired()
+ }
+ 
+ bool OAuth::GetToken(const char *url, const std::string &client_id, const std::string &secret,
+-		     const std::string &redirect_uri, int scope_ver, const std::string &auth_code, bool retry)
++		     const std::string &redirect_uri, int scope_ver, const std::string &auth_code, bool retry,
++		     const std::string &code_verifier)
+ {
+-	return GetTokenInternal(url, client_id, secret, redirect_uri, scope_ver, auth_code, retry);
++	return GetTokenInternal(url, client_id, secret, redirect_uri, scope_ver, auth_code, retry, code_verifier);
+ }
+ 
+ bool OAuth::GetToken(const char *url, const std::string &client_id, int scope_ver, const std::string &auth_code,
+@@ -95,7 +97,8 @@ bool OAuth::GetToken(const char *url, const std::string &client_id, int scope_ve
+ }
+ 
+ bool OAuth::GetTokenInternal(const char *url, const std::string &client_id, const std::string &secret,
+-			     const std::string &redirect_uri, int scope_ver, const std::string &auth_code, bool retry)
++			     const std::string &redirect_uri, int scope_ver, const std::string &auth_code, bool retry,
++			     const std::string &code_verifier)
+ try {
+ 	std::string output;
+ 	std::string error;
+@@ -118,22 +121,27 @@ try {
+ 
+ 	std::string post_data;
+ 	post_data += "action=redirect&client_id=";
+-	post_data += client_id;
++	post_data += QUrl::toPercentEncoding(QString::fromStdString(client_id)).toStdString();
+ 	if (!secret.empty()) {
+ 		post_data += "&client_secret=";
+-		post_data += secret;
++		post_data += QUrl::toPercentEncoding(QString::fromStdString(secret)).toStdString();
+ 	}
+ 	if (!redirect_uri.empty()) {
+ 		post_data += "&redirect_uri=";
+-		post_data += redirect_uri;
++		post_data += QUrl::toPercentEncoding(QString::fromStdString(redirect_uri)).toStdString();
+ 	}
+ 
+ 	if (!auth_code.empty()) {
+ 		post_data += "&grant_type=authorization_code&code=";
+-		post_data += auth_code;
++		post_data += QUrl::toPercentEncoding(QString::fromStdString(auth_code)).toStdString();
+ 	} else {
+ 		post_data += "&grant_type=refresh_token&refresh_token=";
+-		post_data += refresh_token;
++		post_data += QUrl::toPercentEncoding(QString::fromStdString(refresh_token)).toStdString();
++	}
++
++	if (!code_verifier.empty()) {
++		post_data += "&code_verifier=";
++		post_data += QUrl::toPercentEncoding(QString::fromStdString(code_verifier)).toStdString();
+ 	}
+ 
+ 	bool success = false;
+diff --git a/frontend/oauth/OAuth.hpp b/frontend/oauth/OAuth.hpp
+index 46bd720..7d3b3ca 100644
+--- a/frontend/oauth/OAuth.hpp
++++ b/frontend/oauth/OAuth.hpp
+@@ -31,11 +31,13 @@ protected:
+ 	bool GetToken(const char *url, const std::string &client_id, int scope_ver,
+ 		      const std::string &auth_code = std::string(), bool retry = false);
+ 	bool GetToken(const char *url, const std::string &client_id, const std::string &secret,
+-		      const std::string &redirect_uri, int scope_ver, const std::string &auth_code, bool retry);
++		      const std::string &redirect_uri, int scope_ver, const std::string &auth_code, bool retry,
++		      const std::string &code_verifier = {});
+ 
+ private:
+ 	bool GetTokenInternal(const char *url, const std::string &client_id, const std::string &secret,
+-			      const std::string &redirect_uri, int scope_ver, const std::string &auth_code, bool retry);
++			      const std::string &redirect_uri, int scope_ver, const std::string &auth_code, bool retry,
++			      const std::string &code_verifier = {});
+ };
+ 
+ class OAuthStreamKey : public OAuth {
+diff --git a/frontend/oauth/YoutubeAuth.cpp b/frontend/oauth/YoutubeAuth.cpp
+index 415e5ad..9970dd8 100644
+--- a/frontend/oauth/YoutubeAuth.cpp
++++ b/frontend/oauth/YoutubeAuth.cpp
+@@ -1,4 +1,7 @@
+ #include "YoutubeAuth.hpp"
++#include "CherriesYouTubeClient.hpp"
++#include <QCryptographicHash>
++#include <QUrlQuery>
+ 
+ #ifdef BROWSER_AVAILABLE
+ #include <docks/YouTubeChatDock.hpp>
+@@ -72,7 +75,8 @@ YoutubeAuth::~YoutubeAuth()
+ 
+ bool YoutubeAuth::RetryLogin()
+ {
+-	return true;
++	/* Never report an expired/rejected authorization as a successful login. */
++	return false;
+ }
+ 
+ void YoutubeAuth::SaveInternal()
+@@ -221,23 +225,33 @@ std::shared_ptr<Auth> YoutubeAuth::Login(QWidget *owner, const std::string &serv
+ 	dlg.setWindowFlags(dlg.windowFlags() & ~Qt::WindowCloseButtonHint);
+ 	dlg.setWindowTitle(QTStr("YouTube.Auth.WaitingAuth.Title"));
+ 
+-	std::string clientid = YOUTUBE_CLIENTID;
+-	std::string secret = YOUTUBE_SECRET;
+-	deobfuscate_str(&clientid[0], YOUTUBE_CLIENTID_HASH);
+-	deobfuscate_str(&secret[0], YOUTUBE_SECRET_HASH);
++	const auto client = CherriesYouTubeClient(owner, true);
++	if (!client.valid() || !server.GetPort()) {
++		return nullptr;
++	}
++	const std::string clientid = client.id.toStdString();
++	const std::string secret = client.secret.toStdString();
+ 
+ 	QString state;
+ 	state = auth->GenerateState();
+ 	server.SetState(state);
+ 
+-	QString url_template;
+-	url_template += "%1";
+-	url_template += "?response_type=code";
+-	url_template += "&client_id=%2";
+-	url_template += "&redirect_uri=%3";
+-	url_template += "&state=%4";
+-	url_template += "&scope=https://www.googleapis.com/auth/youtube";
+-	QString url = url_template.arg(YOUTUBE_AUTH_URL, clientid.c_str(), redirect_uri, state);
++	const QByteArray verifier = (auth->GenerateState() + auth->GenerateState()).toLatin1();
++	const QByteArray challenge = QCryptographicHash::hash(verifier, QCryptographicHash::Sha256)
++					     .toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals);
++	QUrl authorize(YOUTUBE_AUTH_URL);
++	QUrlQuery query;
++	query.addQueryItem("response_type", "code");
++	query.addQueryItem("client_id", client.id);
++	query.addQueryItem("redirect_uri", redirect_uri);
++	query.addQueryItem("state", state);
++	query.addQueryItem("scope", "https://www.googleapis.com/auth/youtube");
++	query.addQueryItem("access_type", "offline");
++	query.addQueryItem("prompt", "consent");
++	query.addQueryItem("code_challenge", QString::fromLatin1(challenge));
++	query.addQueryItem("code_challenge_method", "S256");
++	authorize.setQuery(query);
++	const QString url = authorize.toString(QUrl::FullyEncoded);
+ 
+ 	QString text = QTStr("YouTube.Auth.WaitingAuth.Text");
+ 	text = text.arg(QString("<a href='%1'>Google OAuth Service</a>").arg(url));
+@@ -262,7 +276,7 @@ std::shared_ptr<Auth> YoutubeAuth::Login(QWidget *owner, const std::string &serv
+ 	// Async Login.
+ 	connect(&server, &AuthListener::ok, &dlg, [&dlg, &auth_code](QString code) {
+ #ifdef _DEBUG
+-		blog(LOG_DEBUG, "Got youtube redirected answer: %s", QT_TO_UTF8(code));
++		blog(LOG_DEBUG, "Received YouTube authorization response");
+ #endif
+ 		auth_code = code;
+ 		dlg.accept();
+@@ -287,10 +301,11 @@ std::shared_ptr<Auth> YoutubeAuth::Login(QWidget *owner, const std::string &serv
+ 	}
+ 
+ 	if (!auth->GetToken(YOUTUBE_TOKEN_URL, clientid, secret, QT_TO_UTF8(redirect_uri), YOUTUBE_SCOPE_VERSION,
+-			    QT_TO_UTF8(auth_code), true)) {
++			    QT_TO_UTF8(auth_code), false, verifier.toStdString())) {
+ 		return nullptr;
+ 	}
+ 
++	CherriesSaveYouTubeClient(client);
+ 	config_t *config = OBSBasic::Get()->Config();
+ 	config_remove_value(config, "YouTube", "ChannelName");
+ 
+diff --git a/frontend/utility/YoutubeApiWrappers.cpp b/frontend/utility/YoutubeApiWrappers.cpp
+index 731a88c..f640f6b 100644
+--- a/frontend/utility/YoutubeApiWrappers.cpp
++++ b/frontend/utility/YoutubeApiWrappers.cpp
+@@ -1,4 +1,5 @@
+ #include "YoutubeApiWrappers.hpp"
++#include <oauth/CherriesYouTubeClient.hpp>
+ 
+ #include <utility/RemoteTextThread.hpp>
+ #include <utility/obf.h>
+@@ -110,10 +111,12 @@ bool YoutubeApiWrappers::UpdateAccessToken()
+ 		return false;
+ 	}
+ 
+-	std::string clientid = YOUTUBE_CLIENTID;
+-	std::string secret = YOUTUBE_SECRET;
+-	deobfuscate_str(&clientid[0], YOUTUBE_CLIENTID_HASH);
+-	deobfuscate_str(&secret[0], YOUTUBE_SECRET_HASH);
++	const auto client = CherriesYouTubeClient();
++	if (!client.valid()) {
++		return false;
++	}
++	const auto clientid = QUrl::toPercentEncoding(client.id);
++	const auto secret = QUrl::toPercentEncoding(client.secret);
+ 
+ 	std::string r_token = QUrl::toPercentEncoding(refresh_token.c_str()).toStdString();
+ 	const QString data_template = "client_id=%1"
+@@ -121,7 +124,7 @@ bool YoutubeApiWrappers::UpdateAccessToken()
+ 				      "&refresh_token=%3"
+ 				      "&grant_type=refresh_token";
+ 	const QString data =
+-		data_template.arg(QString(clientid.c_str()), QString(secret.c_str()), QString(r_token.c_str()));
++		data_template.arg(QString::fromLatin1(clientid), QString::fromLatin1(secret), QString(r_token.c_str()));
+ 	Json json_out;
+ 	bool success = TryInsertCommand(youtubeLiveTokenUrl.data(), "application/x-www-form-urlencoded", "",
+ 					QT_TO_UTF8(data), json_out);
+@@ -129,14 +132,31 @@ bool YoutubeApiWrappers::UpdateAccessToken()
+ 	if (!success || json_out.object_items().find("error") != json_out.object_items().end()) {
+ 		return false;
+ 	}
+-	token = json_out["access_token"].string_value();
+-	return token.empty() ? false : true;
++	const auto nextToken = json_out["access_token"].string_value();
++	if (nextToken.empty()) {
++		return false;
++	}
++	token = nextToken;
++	const auto nextRefresh = json_out["refresh_token"].string_value();
++	if (!nextRefresh.empty()) {
++		refresh_token = nextRefresh;
++	}
++	expire_time = (uint64_t)time(nullptr) + json_out["expires_in"].int_value();
++	/* API calls may run on workers; dock/config persistence belongs to the
++	 * auth object's GUI thread and must not update a different profile. */
++	QMetaObject::invokeMethod(this, [this]() {
++		if (OBSBasic::Get()->GetAuth() != this)
++			return;
++		Auth::Save();
++		/* Auth::Save also persists the active profile configuration. */
++	}, Qt::QueuedConnection);
++	return true;
+ }
+ 
+ bool YoutubeApiWrappers::InsertCommand(const char *url, const char *content_type, std::string request_type,
+ 				       const char *data, Json &json_out, int data_size)
+ {
+-	long error_code;
++	long error_code = 0;
+ 	bool success = TryInsertCommand(url, content_type, request_type, data, json_out, &error_code, data_size);
+ 
+ 	if (error_code == 401) {

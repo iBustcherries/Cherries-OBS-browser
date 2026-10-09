@@ -73,20 +73,21 @@ struct QCef {
 
 static inline void *get_browser_lib()
 {
-	// Disable panels on Wayland for now
+	// Old plugins still use X11 child windows. Only expose Wayland panels if
+	// the loaded plugin explicitly advertises the windowless backend.
 	bool isWayland = false;
 #ifdef ENABLE_WAYLAND
 	isWayland = obs_get_nix_platform() == OBS_NIX_PLATFORM_WAYLAND;
 #endif
-	if (isWayland)
-		return nullptr;
-
 	obs_module_t *browserModule = obs_get_module("obs-browser");
 
 	if (!browserModule)
 		return nullptr;
 
-	return obs_get_module_lib(browserModule);
+	void *lib = obs_get_module_lib(browserModule);
+	if (isWayland && !os_dlsym(lib, "obs_browser_qcef_wayland_osr"))
+		return nullptr;
+	return lib;
 }
 
 static inline QCef *obs_browser_init_panel(void)

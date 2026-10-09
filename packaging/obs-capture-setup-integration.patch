@@ -1,0 +1,38 @@
+diff --git a/frontend/widgets/OBSBasic.cpp b/frontend/widgets/OBSBasic.cpp
+--- a/frontend/widgets/OBSBasic.cpp
++++ b/frontend/widgets/OBSBasic.cpp
+@@ -18,6 +18,9 @@
+ ******************************************************************************/
+ 
+ #include "OBSBasic.hpp"
++#ifdef __linux__
++#include <dialogs/CherriesCaptureSetup.hpp>
++#endif
+ #include "ui-config.h"
+ 
+ #include "ColorSelect.hpp"
+@@ -137,6 +140,9 @@
+ 	api = InitializeAPIInterface(this);
+ 
+ 	ui->setupUi(this);
++#ifdef __linux__
++	CherriesInstallCaptureSetup(ui->menuTools, this);
++#endif
+ 	ui->previewDisabledWidget->setVisible(false);
+ 
+ 	/* Set up streaming connections */
+diff --git a/frontend/CMakeLists.txt b/frontend/CMakeLists.txt
+--- a/frontend/CMakeLists.txt
++++ b/frontend/CMakeLists.txt
+@@ -99,6 +99,11 @@
+   endif()
+ endforeach()
+ 
++if(OS_LINUX)
++  target_sources(obs-studio PRIVATE dialogs/CherriesCaptureSetup.cpp dialogs/CherriesCaptureSetup.hpp
++                 dialogs/CherriesSteamCapture.hpp dialogs/CherriesSteamVdf.hpp)
++endif()
++
+ get_target_property(target_sources obs-studio SOURCES)
+ set(target_cpp_sources ${target_sources})
+ set(target_hpp_sources ${target_sources})

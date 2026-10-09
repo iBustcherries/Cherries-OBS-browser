@@ -1,0 +1,209 @@
+diff --git a/frontend/cmake/feature-twitch.cmake b/frontend/cmake/feature-twitch.cmake
+index 663c48e..5639dbf 100644
+--- a/frontend/cmake/feature-twitch.cmake
++++ b/frontend/cmake/feature-twitch.cmake
+@@ -1,5 +1,6 @@
+-if(TWITCH_CLIENTID AND TWITCH_HASH MATCHES "^(0|[a-fA-F0-9]+)$" AND TARGET OBS::browser-panels)
+-  target_sources(obs-studio PRIVATE oauth/TwitchAuth.cpp oauth/TwitchAuth.hpp)
++if(TARGET OBS::browser-panels)
++  set(TWITCH_HASH "0")
++  target_sources(obs-studio PRIVATE oauth/TwitchAuth.cpp oauth/TwitchAuth.hpp oauth/CherriesTwitchLogin.cpp oauth/CherriesTwitchLogin.hpp)
+   target_enable_feature(obs-studio "Twitch API connection" TWITCH_ENABLED)
+ else()
+   target_disable_feature(obs-studio "Twitch API connection")
+diff --git a/frontend/oauth/TwitchAuth.cpp b/frontend/oauth/TwitchAuth.cpp
+index beee869..bb3ce1d 100644
+--- a/frontend/oauth/TwitchAuth.cpp
++++ b/frontend/oauth/TwitchAuth.cpp
+@@ -1,4 +1,5 @@
+ #include "TwitchAuth.hpp"
++#include "CherriesTwitchLogin.hpp"
+ 
+ #include <dialogs/OAuthLogin.hpp>
+ #include <docks/BrowserDock.hpp>
+@@ -18,9 +19,6 @@ using namespace json11;
+ 
+ /* ------------------------------------------------------------------------- */
+ 
+-#define TWITCH_AUTH_URL OAUTH_BASE_URL "v1/twitch/redirect"
+-#define TWITCH_TOKEN_URL OAUTH_BASE_URL "v1/twitch/token"
+-
+ #define TWITCH_SCOPE_VERSION 1
+ 
+ #define TWITCH_CHAT_DOCK_NAME "twitchChat"
+@@ -46,6 +44,15 @@ TwitchAuth::TwitchAuth(const Def &d) : OAuthStreamKey(d)
+ 	uiLoadTimer.setSingleShot(true);
+ 	uiLoadTimer.setInterval(500);
+ 	connect(&uiLoadTimer, &QTimer::timeout, this, &TwitchAuth::TryLoadSecondaryUIPanes);
++	tokenValidationTimer.setInterval(60 * 60 * 1000);
++	connect(&tokenValidationTimer, &QTimer::timeout, this, [this]() {
++		auto client = CherriesTwitchClient(OBSBasic::Get(), false);
++		if (!token.empty() && CherriesTwitchEnsureToken(client, token, refresh_token, expire_time)) {
++			SaveInternal();
++			config_save_safe(OBSBasic::Get()->Config(), "tmp", nullptr);
++		}
++	});
++	tokenValidationTimer.start();
+ }
+ 
+ TwitchAuth::~TwitchAuth()
+@@ -64,8 +71,7 @@ TwitchAuth::~TwitchAuth()
+ 
+ bool TwitchAuth::MakeApiRequest(const char *path, Json &json_out)
+ {
+-	std::string client_id = TWITCH_CLIENTID;
+-	deobfuscate_str(&client_id[0], TWITCH_HASH);
++	std::string client_id = CherriesTwitchClient(OBSBasic::Get(), false);
+ 
+ 	std::string url = "https://api.twitch.tv/helix/";
+ 	url += std::string(path);
+@@ -117,15 +123,19 @@ bool TwitchAuth::MakeApiRequest(const char *path, Json &json_out)
+ 
+ bool TwitchAuth::GetChannelInfo()
+ try {
+-	std::string client_id = TWITCH_CLIENTID;
+-	deobfuscate_str(&client_id[0], TWITCH_HASH);
++	std::string client_id = CherriesTwitchClient(OBSBasic::Get(), false);
+ 
+-	if (!GetToken(TWITCH_TOKEN_URL, client_id, TWITCH_SCOPE_VERSION)) {
++	if (!CherriesTwitchEnsureToken(client_id, token, refresh_token, expire_time)) {
+ 		return false;
+ 	}
+ 	if (token.empty()) {
+ 		return false;
+ 	}
++	// Persist rotated refresh tokens immediately for already connected profiles.
++	if (currentScopeVer > 0) {
++		OAuth::SaveInternal();
++		config_save_safe(OBSBasic::Get()->Config(), "tmp", nullptr);
++	}
+ 	if (!key_.empty()) {
+ 		return true;
+ 	}
+@@ -300,6 +310,10 @@ void TwitchAuth::LoadUI()
+ 
+ void TwitchAuth::LoadSecondaryUIPanes()
+ {
++	if (secondaryUILoaded) {
++		return;
++	}
++	secondaryUILoaded = true;
+ 	OBSBasic *main = OBSBasic::Get();
+ 
+ 	QCefWidget *browser;
+@@ -441,50 +455,41 @@ void TwitchAuth::TryLoadSecondaryUIPanes()
+ 		}
+ 
+ 		if (!found) {
+-			QMetaObject::invokeMethod(this_, [this_]() { this_->uiLoadTimer.start(); });
++			QMetaObject::invokeMethod(this_, [this_]() {
++				if (this_ && !this_->secondaryUILoaded) {
++					this_->uiLoadTimer.start();
++				}
++			});
+ 		} else {
+ 			QMetaObject::invokeMethod(this_, &TwitchAuth::LoadSecondaryUIPanes);
+ 		}
+ 	};
+ 
+-	panel_cookies->CheckForCookie("https://www.twitch.tv", "auth-token", cb);
++	if (panel_cookies && !secondaryUILoaded) {
++		panel_cookies->CheckForCookie("https://www.twitch.tv", "auth-token", cb);
++	}
+ }
+ 
+ bool TwitchAuth::RetryLogin()
+ {
+-	OAuthLogin login(OBSBasic::Get(), TWITCH_AUTH_URL, false);
+-	if (login.exec() == QDialog::Rejected) {
+-		return false;
+-	}
+-
+-	std::shared_ptr<TwitchAuth> auth = std::make_shared<TwitchAuth>(twitchDef);
+-	std::string client_id = TWITCH_CLIENTID;
+-	deobfuscate_str(&client_id[0], TWITCH_HASH);
+-
+-	return GetToken(TWITCH_TOKEN_URL, client_id, TWITCH_SCOPE_VERSION, QT_TO_UTF8(login.GetCode()), true);
++	OBSBasic::InitBrowserPanelSafeBlock();
++	auto client = CherriesTwitchClient(OBSBasic::Get(), true);
++	return CherriesTwitchLogin(OBSBasic::Get(), client, token, refresh_token, expire_time, panel_cookies);
+ }
+ 
+ std::shared_ptr<Auth> TwitchAuth::Login(QWidget *parent, const std::string &)
+ {
+-	OAuthLogin login(parent, TWITCH_AUTH_URL, false);
+-	if (login.exec() == QDialog::Rejected) {
++	OBSBasic::InitBrowserPanelSafeBlock();
++	auto client = CherriesTwitchClient(parent, true);
++	auto auth = std::make_shared<TwitchAuth>(twitchDef);
++	if (!CherriesTwitchLogin(parent, client, auth->token, auth->refresh_token, auth->expire_time, panel_cookies)) {
+ 		return nullptr;
+ 	}
+-
+-	std::shared_ptr<TwitchAuth> auth = std::make_shared<TwitchAuth>(twitchDef);
+-
+-	std::string client_id = TWITCH_CLIENTID;
+-	deobfuscate_str(&client_id[0], TWITCH_HASH);
+-
+-	if (!auth->GetToken(TWITCH_TOKEN_URL, client_id, TWITCH_SCOPE_VERSION, QT_TO_UTF8(login.GetCode()))) {
++	if (!auth->GetChannelInfo()) {
+ 		return nullptr;
+ 	}
+-
+-	if (auth->GetChannelInfo()) {
+-		return auth;
+-	}
+-
+-	return nullptr;
++	auth->currentScopeVer = TWITCH_SCOPE_VERSION;
++	return auth;
+ }
+ 
+ static std::shared_ptr<Auth> CreateTwitchAuth()
+@@ -495,17 +500,13 @@ static std::shared_ptr<Auth> CreateTwitchAuth()
+ static void DeleteCookies()
+ {
+ 	if (panel_cookies) {
+-		panel_cookies->DeleteCookies("twitch.tv", std::string());
++		panel_cookies->DeleteCookies("https://www.twitch.tv", std::string());
++		panel_cookies->DeleteCookies("https://id.twitch.tv", std::string());
++		panel_cookies->FlushStore();
+ 	}
+ }
+ 
+ void RegisterTwitchAuth()
+ {
+-#if !defined(__APPLE__) && !defined(_WIN32)
+-	if (QApplication::platformName().contains("wayland")) {
+-		return;
+-	}
+-#endif
+-
+ 	OAuth::RegisterOAuth(twitchDef, CreateTwitchAuth, TwitchAuth::Login, DeleteCookies);
+ }
+diff --git a/frontend/oauth/TwitchAuth.hpp b/frontend/oauth/TwitchAuth.hpp
+index bbd8ca4..33fada7 100644
+--- a/frontend/oauth/TwitchAuth.hpp
++++ b/frontend/oauth/TwitchAuth.hpp
+@@ -10,6 +10,8 @@ class TwitchAuth : public OAuthStreamKey {
+ 	Q_OBJECT
+ 
+ 	bool uiLoaded = false;
++	bool secondaryUILoaded = false;
++	QTimer tokenValidationTimer;
+ 
+ 	std::string name;
+ 	std::string uuid;
+diff --git a/frontend/widgets/OBSBasic_Browser.cpp b/frontend/widgets/OBSBasic_Browser.cpp
+index 61dee0c..5512551 100644
+--- a/frontend/widgets/OBSBasic_Browser.cpp
++++ b/frontend/widgets/OBSBasic_Browser.cpp
+@@ -205,7 +205,7 @@ static void InitPanelCookieManager()
+ 	sub_path += "obs_profile_cookies/";
+ 	sub_path += cookie_id;
+ 
+-	panel_cookies = cef->create_cookie_manager(sub_path);
++	panel_cookies = cef->create_cookie_manager(sub_path, true);
+ }
+ #endif
+ 

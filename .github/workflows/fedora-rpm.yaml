@@ -1,0 +1,302 @@
+name: Experimental Fedora 44 RPM
+
+on:
+  push:
+    branches: [wayland-osr-docks]
+    paths:
+      - 'panel/**'
+      - 'obs-browser-plugin.cpp'
+      - 'cmake/**'
+      - 'packaging/**'
+      - '.github/workflows/fedora-rpm.yaml'
+  pull_request:
+    branches: [master]
+    paths:
+      - 'panel/**'
+      - 'obs-browser-plugin.cpp'
+      - 'cmake/**'
+      - 'packaging/**'
+      - '.github/workflows/fedora-rpm.yaml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rpm:
+    runs-on: ubuntu-26.04
+    container: fedora:44
+    timeout-minutes: 60
+    steps:
+      - name: Install build tools and dependencies
+        shell: bash
+        run: |
+          dnf install -y https://download1.rpmfusion.org/free/fedora/rpmfusion-free-release-44.noarch.rpm
+          dnf install -y git gcc-c++ cmake ninja-build rpm-build rsync curl tar xz \
+            pkgconf-pkg-config extra-cmake-modules qt6-qtbase-devel qt6-qtsvg-devel \
+            ffmpeg-free-devel libcurl-devel jansson-devel libX11-devel \
+            libXcomposite-devel libXinerama-devel libXrandr-devel libXfixes-devel \
+            libXext-devel libxcb-devel libxkbcommon-devel pipewire-devel \
+            wayland-devel mesa-libEGL-devel mesa-libGL-devel pulseaudio-libs-devel \
+            alsa-lib-devel libv4l-devel libva-devel libdrm-devel systemd-devel \
+            pciutils-devel uthash-devel simde-devel nlohmann-json-devel pulseaudio-utils pipewire-pulseaudio \
+            websocketpp-devel asio-devel libqrcodegencpp-devel mbedtls-devel \
+            libuuid-devel zlib-devel python3-devel speexdsp-devel x264-devel libvpl-devel fontconfig-devel freetype-devel nv-codec-headers vulkan-loader-devel vulkan-headers mesa-vulkan-drivers zenity pipewire pipewire-utils wireplumber dbus-daemon xorg-x11-server-Xvfb qt6-qtwayland mesa-dri-drivers ffmpeg-free
+          dnf install -y glibc-devel.i686 libgcc.i686 libatomic.i686 vulkan-loader-devel.i686 mesa-libGL-devel.i686
+      - name: Check out browser changes
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          path: browser-fork
+          persist-credentials: false
+      - name: Check out pinned OBS integration target
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: obsproject/obs-studio
+          ref: cffa83ba552f1ef6a0a05851c3aa07b3811d7e58
+          path: obs
+          fetch-depth: 0
+          submodules: recursive
+          persist-credentials: false
+      - name: Check out pinned Linux game capture
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: nowrep/obs-vkcapture
+          ref: 8a2c43295fae2ede8ffd382a1581281ceb6153c0
+          path: obs/plugins/cherries-gamecapture
+          persist-credentials: false
+      - name: Check out pinned PipeWire game audio backend
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: dimtpap/obs-pipewire-audio-capture
+          ref: 6120aa622792908e4529b0e171b2acce5efb3f18
+          path: obs/plugins/cherries-gameaudio
+          persist-credentials: false
+      - name: Check out pinned canvas engine
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: Aitum/obs-vertical-canvas
+          ref: 106a55398d2cfa7aa039b02424c6a8d8619b6966
+          path: obs/plugins/vertical-canvas
+          persist-credentials: false
+      - name: Check out pinned multistream engine
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: Aitum/obs-aitum-multistream
+          ref: c48b4bf182f8b354255df7329c9afe3dee4f9820
+          path: obs/plugins/aitum-multistream
+          persist-credentials: false
+      - name: Integrate fork and download verified CEF
+        env:
+          CHERRIES_TWITCH_CLIENT_ID: ${{ vars.CHERRIES_TWITCH_CLIENT_ID }}
+          CHERRIES_YOUTUBE_CLIENT_JSON: ${{ secrets.CHERRIES_YOUTUBE_CLIENT_JSON }}
+        shell: bash
+        run: |
+          rsync -a --delete --exclude=.git --exclude=.github browser-fork/ obs/plugins/obs-browser/
+          git -C obs apply ../browser-fork/packaging/obs-twitch-integration.patch
+          cp browser-fork/packaging/twitch/* obs/frontend/oauth/
+          git -C obs apply ../browser-fork/packaging/obs-youtube-integration.patch
+          cp browser-fork/packaging/youtube/* obs/frontend/oauth/
+          python3 browser-fork/packaging/configure-youtube-client.py --required obs/frontend/oauth/CherriesYouTubeBundled.hpp
+          git -C obs apply ../browser-fork/packaging/obs-capture-setup-integration.patch
+          cp browser-fork/packaging/gamecapture/CherriesCaptureSetup.* browser-fork/packaging/gamecapture/CherriesSteam*.hpp obs/frontend/dialogs/
+          git -C obs/plugins/cherries-gamecapture apply "$GITHUB_WORKSPACE/browser-fork/packaging/obs-vkcapture-integration.patch"
+          cp browser-fork/packaging/gamecapture/*.h obs/plugins/cherries-gamecapture/src/
+          cp browser-fork/packaging/gamecapture/CherriesGameLaunch.c obs/plugins/cherries-gamecapture/src/
+          git -C obs/plugins/cherries-gameaudio apply "$GITHUB_WORKSPACE/browser-fork/packaging/obs-gameaudio-integration.patch"
+          cp browser-fork/packaging/gamecapture/CherriesGameAudio.h browser-fork/packaging/gamecapture/CherriesAudioTarget.h obs/plugins/cherries-gameaudio/src/
+          printf '%s\n' 'add_subdirectory(cherries-gamecapture)' 'target_enable(linux-vkcapture)' 'set_obs_core_modules()' >> obs/plugins/CMakeLists.txt
+          python3 browser-fork/packaging/configure-twitch-client.py obs/frontend/oauth/CherriesTwitchClient.hpp
+          python3 browser-fork/packaging/studio/integrate.py obs
+          python3 browser-fork/packaging/branding/integrate.py obs
+          mkdir -p obs/.deps/cef
+          curl -fL -o obs/.deps/cef.tar.xz https://cdn-fastly.obsproject.com/downloads/cef_binary_7871_linux_x86_64.tar.xz
+          echo '8ffc64d06ea74da613eeda7f2aa5d4e98661af6fa3ed8c68724c9a6e4e89ea8e  obs/.deps/cef.tar.xz' | sha256sum -c -
+          tar --no-same-owner -xJf obs/.deps/cef.tar.xz -C obs/.deps/cef --strip-components=1
+      - name: Check completed dock drag mouse-grab cleanup
+        shell: bash
+        run: |
+          g++ -std=c++20 -fPIC -Ibrowser-fork browser-fork/tests/wayland-dock-grab.cpp \
+            $(pkg-config --cflags --libs Qt6Widgets) -o wayland-dock-grab-test
+          QT_QPA_PLATFORM=offscreen ./wayland-dock-grab-test
+      - name: Check browser frame resizing and DPI
+        shell: bash
+        run: |
+          g++ -std=c++20 -fPIC -Ibrowser-fork browser-fork/tests/browser-frame-size.cpp \
+            $(pkg-config --cflags --libs Qt6Gui) -o browser-frame-size-test
+          ./browser-frame-size-test
+      - name: Check Twitch session protocol
+        shell: bash
+        run: |
+          g++ -std=c++20 -fPIC -Ibrowser-fork browser-fork/tests/twitch-session.cpp \
+            $(pkg-config --cflags --libs Qt6Core) -o twitch-session-test
+          ./twitch-session-test
+      - name: Check YouTube callbacks and automatic game selection
+        shell: bash
+        run: |
+          python3 browser-fork/tests/youtube-build-client.py
+          g++ -std=c++20 -fPIC -Ibrowser-fork browser-fork/tests/youtube-session.cpp \
+            $(pkg-config --cflags --libs Qt6Core) -o youtube-session-test
+          ./youtube-session-test
+          gcc -Ibrowser-fork browser-fork/tests/game-selection.c -o game-selection-test
+          ./game-selection-test
+          gcc -Ibrowser-fork browser-fork/tests/game-audio-target.c -o game-audio-target-test
+          ./game-audio-target-test
+          sh -n browser-fork/packaging/gamecapture/cherries-gamecapture
+          sh -n browser-fork/packaging/gamecapture/cherries-steam
+          bash browser-fork/tests/game-launch.sh
+      - name: Check reversible Steam capture setup
+        shell: bash
+        run: |
+          g++ -std=c++20 -fPIC -Ibrowser-fork browser-fork/tests/steam-capture-setup.cpp \
+            $(pkg-config --cflags --libs Qt6Core) -o steam-capture-setup-test
+          ./steam-capture-setup-test
+          gcc -Ibrowser-fork browser-fork/tests/capture-eligibility.c -o capture-eligibility-test
+          ./capture-eligibility-test
+      - name: Configure and build Fedora binaries
+        shell: bash
+        run: |
+          cmake -S obs -B obs/build-fedora -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_INSTALL_PREFIX=/opt/cherries-obs \
+            -DCMAKE_INSTALL_LIBDIR=lib64 -DENABLE_RELOCATABLE=ON \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DENABLE_BROWSER=ON -DENABLE_BROWSER_PANELS=ON -DENABLE_WAYLAND=ON \
+            -DCEF_ROOT_DIR="$GITHUB_WORKSPACE/obs/.deps/cef" \
+            -DENABLE_AJA=OFF -DENABLE_VLC=OFF -DENABLE_WEBRTC=OFF \
+            -DENABLE_VST=OFF -DENABLE_SCRIPTING=OFF -DENABLE_NEW_MPEGTS_OUTPUT=OFF
+          grep -Fq '"linux-vkcapture"' obs/build-fedora/libobs/obs-core-modules.c
+          cmake --build obs/build-fedora --parallel 2
+          DESTDIR="$GITHUB_WORKSPACE/stage" cmake --install obs/build-fedora
+          cp obs/.deps/cef/LICENSE.txt stage/opt/cherries-obs/CEF-LICENSE.txt
+          mkdir -p stage/opt/cherries-obs/share/licenses/cherries-studio
+          cp obs/plugins/vertical-canvas/LICENSE stage/opt/cherries-obs/share/licenses/cherries-studio/vertical-LICENSE
+          cp obs/plugins/aitum-multistream/LICENSE stage/opt/cherries-obs/share/licenses/cherries-studio/multistream-LICENSE
+          cp browser-fork/packaging/STUDIO.md stage/opt/cherries-obs/share/licenses/cherries-studio/README.md
+      - name: Build 32-bit game capture hooks
+        shell: bash
+        run: |
+          cmake -S obs/plugins/cherries-gamecapture -B gamecapture-32 -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_PLUGIN=OFF \
+            -DCMAKE_INSTALL_PREFIX=/opt/cherries-obs -DCMAKE_INSTALL_LIBDIR=lib \
+            -DCMAKE_C_FLAGS=-m32 -DCMAKE_SHARED_LINKER_FLAGS=-m32 \
+            -DVulkan_LIBRARY=/usr/lib/libvulkan.so -DOPENGL_gl_LIBRARY=/usr/lib/libGL.so
+          cmake --build gamecapture-32 --parallel 2
+          DESTDIR="$GITHUB_WORKSPACE/stage" cmake --install gamecapture-32
+          mkdir -p stage/opt/cherries-obs/share/licenses/obs-vkcapture
+          cp obs/plugins/cherries-gamecapture/LICENSE stage/opt/cherries-obs/share/licenses/obs-vkcapture/
+          mkdir -p stage/opt/cherries-obs/share/licenses/obs-pipewire-audio-capture
+          cp obs/plugins/cherries-gameaudio/LICENSE stage/opt/cherries-obs/share/licenses/obs-pipewire-audio-capture/
+          ln -s ../lib64 stage/opt/cherries-obs/lib/x86_64-linux-gnu
+          ln -s . stage/opt/cherries-obs/lib/i386-linux-gnu
+      - name: Build RPM
+        shell: bash
+        run: |
+          rpmbuild -bb browser-fork/packaging/cherries-obs-wayland.spec \
+            --define "_topdir $GITHUB_WORKSPACE/rpmbuild" \
+            --define "stage_dir $GITHUB_WORKSPACE/stage"
+          rpm -qpl rpmbuild/RPMS/x86_64/*.rpm
+          rpm -qpR rpmbuild/RPMS/x86_64/*.rpm
+      - name: Verify RPM installation and executable loading
+        shell: bash
+        run: |
+          dnf install -y rpmbuild/RPMS/x86_64/*.rpm
+          cherries-obs-wayland --version
+          ldd -r /opt/cherries-obs/lib64/obs-modules/core/linux-vkcapture.so > gamecapture-linkage.txt 2>&1
+          if grep -E 'not found|undefined symbol' gamecapture-linkage.txt; then exit 1; fi
+          test -f /opt/cherries-obs/lib64/obs_glcapture/libobs_glcapture.so
+          test -f /opt/cherries-obs/lib/obs_glcapture/libobs_glcapture.so
+          test -f /opt/cherries-obs/share/vulkan/implicit_layer.d/obs_vkcapture_64.json
+          test -f /opt/cherries-obs/share/vulkan/implicit_layer.d/obs_vkcapture_32.json
+          readelf -h /opt/cherries-obs/lib64/libVkLayer_obs_vkcapture.so | grep -q ELF64
+          readelf -h /opt/cherries-obs/lib/libVkLayer_obs_vkcapture.so | grep -q ELF32
+          nm -D /opt/cherries-obs/lib64/libVkLayer_obs_vkcapture.so | grep -q ' T OBS_Negotiate'
+          nm -D /opt/cherries-obs/lib/libVkLayer_obs_vkcapture.so | grep -q ' T OBS_Negotiate'
+          nm -D /opt/cherries-obs/lib64/obs_glcapture/libobs_glcapture.so | grep -q ' T eglSwapBuffers'
+          nm -D /opt/cherries-obs/lib/obs_glcapture/libobs_glcapture.so | grep -q ' T eglSwapBuffers'
+          nm -D /opt/cherries-obs/lib64/obs_glcapture/libobs_glcapture.so | grep -q ' T execve'
+          nm -D /opt/cherries-obs/lib/obs_glcapture/libobs_glcapture.so | grep -q ' T execve'
+          cherries-gamecapture /usr/bin/true 2> gamecapture-preload.txt
+          if grep -E 'cannot be preloaded|symbol lookup error' gamecapture-preload.txt; then exit 1; fi
+          bash browser-fork/tests/game-launch.sh /opt/cherries-obs/lib64/obs_glcapture/libobs_glcapture.so
+          bash browser-fork/tests/opengl-startup.sh /opt/cherries-obs/lib64/obs_glcapture/libobs_glcapture.so 64
+          bash browser-fork/tests/opengl-startup.sh /opt/cherries-obs/lib/obs_glcapture/libobs_glcapture.so 32
+      - name: Verify automatic Vulkan layer loading
+        shell: bash
+        run: |
+          mkdir -p capture-home/share
+          ./steam-capture-setup-test --installed-vulkan "$GITHUB_WORKSPACE/capture-home/share"
+          gcc browser-fork/tests/vulkan-auto-layer.c -lvulkan -o vulkan-auto-layer-test
+          env -u OBS_VKCAPTURE -u VK_ADD_IMPLICIT_LAYER_PATH -u VK_IMPLICIT_LAYER_PATH \
+            XDG_DATA_HOME="$GITHUB_WORKSPACE/capture-home/share" VK_LOADER_DEBUG=layer \
+            ./vulkan-auto-layer-test > automatic-vulkan.log 2>&1
+          cat automatic-vulkan.log
+          grep -E 'Insert instance layer.*VK_LAYER_CHERRIES_vkcapture_64' automatic-vulkan.log
+      - name: Verify Game Capture source registration
+        shell: bash
+        run: |
+          gcc -std=gnu11 -Iobs/libobs -Iobs/build-fedora/config \
+            browser-fork/tests/game-source-registration.c \
+            -L/opt/cherries-obs/lib64 -Wl,-rpath,/opt/cherries-obs/lib64 -lobs -lX11 \
+            -o /opt/cherries-obs/bin/cherries-source-test
+          Xvfb :98 -screen 0 1280x720x24 -nolisten tcp > source-display.log 2>&1 &
+          display_server=$!
+          trap 'kill "$display_server" 2>/dev/null || true' EXIT
+          DISPLAY=:98 /opt/cherries-obs/bin/cherries-source-test
+      - name: Upload experimental Fedora RPM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: cherries-obs-wayland-fedora44-x86_64
+          path: rpmbuild/RPMS/x86_64/*.rpm
+          retention-days: 14
+      - name: Verify game audio isolation, switching and stop
+        shell: bash
+        run: |
+          gcc -std=gnu11 -Ibrowser-fork -Ibrowser-fork/packaging/gamecapture \
+            -Iobs/libobs -Iobs/build-fedora/config -Iobs/plugins/cherries-gameaudio/src \
+            browser-fork/tests/game-audio-stream.c \
+            obs/plugins/cherries-gameaudio/src/pipewire-audio.c \
+            obs/plugins/cherries-gameaudio/src/pipewire-audio-capture-app.c \
+            $(pkg-config --cflags --libs libpipewire-0.3) \
+            -L/opt/cherries-obs/lib64 -Wl,-rpath,/opt/cherries-obs/lib64 -lobs -lm -lpthread \
+            -o game-audio-stream-test
+          dbus-run-session -- bash browser-fork/tests/game-audio-stream.sh
+      - name: Verify PulseAudio game routing and bridge PID regression
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          source = Path('obs/plugins/cherries-gameaudio/src/pipewire-audio-capture-app.c').read_text()
+          resolver = 'cherries_audio_client_process(spa_dict_lookup(info->props, PW_KEY_CLIENT_API),'
+          assert source.count(resolver) == 1
+          # Recreate the old choice of the bridge's security PID to prove the
+          # Pulse test detects the reported silent-game failure.
+          source = source.replace(resolver, 'cherries_audio_client_process(NULL,')
+          Path('legacy-pulse-audio-capture-app.c').write_text(source)
+          PY
+          gcc -std=gnu11 -Ibrowser-fork -Ibrowser-fork/packaging/gamecapture \
+            -Iobs/libobs -Iobs/build-fedora/config -Iobs/plugins/cherries-gameaudio/src \
+            browser-fork/tests/game-audio-stream.c \
+            obs/plugins/cherries-gameaudio/src/pipewire-audio.c \
+            legacy-pulse-audio-capture-app.c \
+            $(pkg-config --cflags --libs libpipewire-0.3) \
+            -L/opt/cherries-obs/lib64 -Wl,-rpath,/opt/cherries-obs/lib64 -lobs -lm -lpthread \
+            -o game-audio-stream-legacy-test
+          dbus-run-session -- bash browser-fork/tests/game-audio-stream.sh pulse ./game-audio-stream-legacy-test legacy-failure
+          dbus-run-session -- bash browser-fork/tests/game-audio-stream.sh pulse
+
+      - name: Verify Studio workspace and live multistream routing
+        shell: bash
+        run: |
+          mkdir -p studio-test-plugins studio-results
+          g++ -std=c++17 -fPIC -shared browser-fork/tests/studio-smoke.cpp \
+            -Iobs/libobs -Iobs/build-fedora/config -Iobs/frontend/api \
+            $(pkg-config --cflags --libs Qt6Widgets) \
+            -L/opt/cherries-obs/lib64 -Wl,-rpath,/opt/cherries-obs/lib64 \
+            -lobs -lobs-frontend-api -o studio-test-plugins/studio-smoke.so
+          dbus-run-session -- bash browser-fork/tests/studio-smoke.sh studio-results
+      - name: Upload Studio verification evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: cherries-studio-verification
+          path: studio-results/
+          retention-days: 14

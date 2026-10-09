@@ -1,0 +1,375 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 81a8309..ed0e3c0 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -65,7 +65,11 @@ if (BUILD_PLUGIN)
+         endif()
+     endif()
+ 
+-    set(PLUGIN_SOURCES src/vkcapture.c)
++    pkg_check_modules(GAME_PIPEWIRE libpipewire-0.3 IMPORTED_TARGET REQUIRED)
++    set(GAME_AUDIO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../cherries-gameaudio/src")
++    set(PLUGIN_SOURCES src/vkcapture.c
++        ${GAME_AUDIO_ROOT}/pipewire-audio.c
++        ${GAME_AUDIO_ROOT}/pipewire-audio-capture-app.c)
+     set(PLUGIN_LIBS ${PLUGIN_LIBS} obs-frontend-api PkgConfig::EGL)
+     if (HAVE_X11_XCB)
+         set(PLUGIN_SOURCES ${PLUGIN_SOURCES} src/xcursor-xcb.c)
+@@ -85,11 +89,16 @@ if (BUILD_PLUGIN)
+         set(PLUGIN_LIBS ${PLUGIN_LIBS} PkgConfig::WAYLAND_CLIENT)
+     endif()
+     add_library(linux-vkcapture MODULE ${PLUGIN_SOURCES})
+-    target_link_libraries(linux-vkcapture ${PLUGIN_LIBS})
++    target_link_libraries(linux-vkcapture ${PLUGIN_LIBS} PkgConfig::GAME_PIPEWIRE)
++    target_include_directories(linux-vkcapture PRIVATE src ${GAME_AUDIO_ROOT})
+     set_target_properties(linux-vkcapture PROPERTIES PREFIX "")
+     target_include_directories(linux-vkcapture PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>)
+ 
+-    if (COMMAND install_obs_plugin_with_data)
++    if (COMMAND set_target_properties_obs)
++        set_target_properties_obs(linux-vkcapture PROPERTIES FOLDER plugins PREFIX "")
++        set_property(TARGET linux-vkcapture PROPERTY INSTALL_RPATH "$ORIGIN;$ORIGIN/../..")
++        install(DIRECTORY data/ DESTINATION "${OBS_DATA_DESTINATION}/obs-modules/core/linux-vkcapture")
++    elseif (COMMAND install_obs_plugin_with_data)
+         install_obs_plugin_with_data(linux-vkcapture data)
+     else()
+         install(TARGETS linux-vkcapture
+@@ -102,6 +111,7 @@ endif()
+ 
+ set(LAYER_SOURCES src/vklayer.c src/capture.c)
+ add_library(VkLayer_obs_vkcapture MODULE ${LAYER_SOURCES})
++target_compile_definitions(VkLayer_obs_vkcapture PRIVATE CHERRIES_AUTO_VULKAN_FILTER=1)
+ set_target_properties(VkLayer_obs_vkcapture PROPERTIES LINK_FLAGS "-Wl,--version-script=\"${CMAKE_CURRENT_SOURCE_DIR}/src/vklayer.version\"")
+ target_link_libraries(VkLayer_obs_vkcapture Vulkan::Vulkan)
+ target_include_directories(VkLayer_obs_vkcapture PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>)
+@@ -115,13 +125,16 @@ if (HAVE_X11_XCB)
+     )
+ endif()
+ 
+-set(GL_SOURCES src/dlsym.c src/elfhacks.c src/glinject.c src/capture.c)
++set(GL_SOURCES src/dlsym.c src/elfhacks.c src/glinject.c src/capture.c src/CherriesGameLaunch.c)
+ add_library(obs_glcapture MODULE ${GL_SOURCES})
+ set_target_properties(obs_glcapture PROPERTIES LINK_FLAGS "-Wl,--version-script=\"${CMAKE_CURRENT_SOURCE_DIR}/src/glinject.version\"")
+-target_link_libraries(obs_glcapture ${CMAKE_DL_LIBS} OpenGL::GL)
++# Resolve GL lazily with dlopen. An eager/global GL dependency preempts the
++# writable GL function-pointer symbols exported by HashLink's SDL module.
++target_link_libraries(obs_glcapture ${CMAKE_DL_LIBS})
+ target_include_directories(obs_glcapture PRIVATE
+     $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
+     $<TARGET_PROPERTY:Vulkan::Vulkan,INTERFACE_INCLUDE_DIRECTORIES>
++    $<TARGET_PROPERTY:OpenGL::GL,INTERFACE_INCLUDE_DIRECTORIES>
+ )
+ 
+ configure_file(plugin-macros.h.in ${CMAKE_CURRENT_BINARY_DIR}/plugin-macros.h @ONLY)
+@@ -140,3 +153,12 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/obs_vkcapture${LAYER_SUFFIX}.json
+ install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/obs-gamecapture
+     src/obs-vkcapture src/obs-glcapture
+     DESTINATION "${CMAKE_INSTALL_FULL_BINDIR}")
++
++# Pinned third-party capture sources retain their own warning policy when
++# embedded in OBS's stricter top-level build; diagnostics remain visible.
++foreach(capture_target linux-vkcapture VkLayer_obs_vkcapture obs_glcapture)
++    if (TARGET ${capture_target})
++        target_compile_options(${capture_target} PRIVATE -Wno-error)
++        set_target_properties(${capture_target} PROPERTIES C_VISIBILITY_PRESET default COMPILE_WARNING_AS_ERROR OFF)
++    endif()
++endforeach()
+diff --git a/src/capture.c b/src/capture.c
+index 247c04b..9059b11 100644
+--- a/src/capture.c
++++ b/src/capture.c
+@@ -18,6 +18,9 @@ with this program. If not, see <https://www.gnu.org/licenses/>
+ 
+ #include "capture.h"
+ #include "utils.h"
++#ifdef CHERRIES_AUTO_VULKAN_FILTER
++#include "CherriesCaptureEligibility.h"
++#endif
+ 
+ #include <stdio.h>
+ #include <string.h>
+@@ -32,6 +35,7 @@ with this program. If not, see <https://www.gnu.org/licenses/>
+ static struct {
+     int connfd;
+     bool accepted;
++    bool enabled;
+     bool capturing;
+     bool no_modifiers;
+     bool linear;
+@@ -118,10 +122,16 @@ void capture_init()
+ {
+     memset(&data, 0, sizeof(data));
+     data.connfd = -1;
++#ifdef CHERRIES_AUTO_VULKAN_FILTER
++    data.enabled = cherries_automatic_vulkan_allowed(getenv("OBS_VKCAPTURE"), getenv("SteamAppId"), getenv("SteamGameId"));
++#else
++    data.enabled = true;
++#endif
+ }
+ 
+ void capture_update_socket()
+ {
++    if (!data.enabled) return;
+     static int64_t last_check = 0;
+     const int64_t now = os_time_get_nano();
+     if (now - last_check < 1000000000) {
+diff --git a/src/glinject.version b/src/glinject.version
+index 96d4bc4..7085171 100644
+--- a/src/glinject.version
++++ b/src/glinject.version
+@@ -2,6 +2,12 @@
+     global:
+         dlsym;
+         dlvsym;
++        execve;
++        execv;
++        execvp;
++        execvpe;
++        posix_spawn;
++        posix_spawnp;
+         glX*;
+         egl*;
+     local: *;
+diff --git a/src/obs_vkcapture.json.in b/src/obs_vkcapture.json.in
+index a5c91b2..a563caa 100644
+--- a/src/obs_vkcapture.json.in
++++ b/src/obs_vkcapture.json.in
+@@ -1,7 +1,7 @@
+ {
+     "file_format_version": "1.1.2",
+     "layer": {
+-        "name": "VK_LAYER_OBS_vkcapture@LAYER_SUFFIX@",
++        "name": "VK_LAYER_CHERRIES_vkcapture@LAYER_SUFFIX@",
+         "type": "GLOBAL",
+         "library_path": "@CMAKE_INSTALL_FULL_LIBDIR@/libVkLayer_obs_vkcapture.so",
+         "api_version": "@Vulkan_VERSION@",
+diff --git a/src/vkcapture.c b/src/vkcapture.c
+index b974e22..5b71cfd 100644
+--- a/src/vkcapture.c
++++ b/src/vkcapture.c
+@@ -1,3 +1,9 @@
++#ifndef _GNU_SOURCE
++#define _GNU_SOURCE
++#endif
++#include "CherriesGameSelection.h"
++#include "CherriesGameAudio.h"
++#include <pipewire/pipewire.h>
+ /*
+ OBS Linux Vulkan/OpenGL game capture
+ Copyright (C) 2021 David Rosca <nowrep@gmail.com>
+@@ -67,6 +73,7 @@ enum vkcapture_import_attempt {
+ 
+ typedef struct {
+     int id;
++    pid_t pid;
+     int sockfd;
+     int activated;
+     int buf_id;
+@@ -106,12 +113,17 @@ typedef struct {
+ 
+     int buf_id;
+     int client_id;
++    bool capture_audio;
++    void *game_audio;
++    pid_t audio_pid;
++    pthread_mutex_t audio_mutex;
+     struct capture_texture_data tdata;
+ 
+ } vkcapture_source_t;
+ 
+ static bool server_wakeup();
+ static void vkcapture_get_hooked(void *data, calldata_t *cd);
++static void cherries_capture_state(void *data, calldata_t *cd);
+ 
+ static const char *import_attempt_str(enum vkcapture_import_attempt attempt)
+ {
+@@ -316,6 +328,11 @@ static void vkcapture_source_destroy(void *data)
+ 
+     vkcapture_source_t *ctx = data;
+ 
++    pthread_mutex_lock(&ctx->audio_mutex);
++    if (ctx->game_audio)
++        cherries_game_audio_destroy(ctx->game_audio);
++    pthread_mutex_unlock(&ctx->audio_mutex);
++    pthread_mutex_destroy(&ctx->audio_mutex);
+     destroy_texture(ctx);
+     cursor_destroy(ctx);
+ 
+@@ -326,6 +343,19 @@ static void vkcapture_source_update(void *data, obs_data_t *settings)
+ {
+     vkcapture_source_t *ctx = data;
+ 
++    pthread_mutex_lock(&ctx->audio_mutex);
++    ctx->capture_audio = obs_data_get_bool(settings, "capture_audio");
++    if (ctx->capture_audio && !ctx->game_audio) {
++        ctx->game_audio = cherries_game_audio_create(ctx->source);
++        ctx->audio_pid = -1;
++        if (!ctx->game_audio)
++            blog(LOG_WARNING, "Game audio could not connect to PipeWire");
++    } else if (!ctx->capture_audio && ctx->game_audio) {
++        cherries_game_audio_destroy(ctx->game_audio);
++        ctx->game_audio = NULL;
++        ctx->audio_pid = 0;
++    }
++    pthread_mutex_unlock(&ctx->audio_mutex);
+     ctx->show_cursor = obs_data_get_bool(settings, "show_cursor");
+     ctx->allow_transparency = obs_data_get_bool(settings, "allow_transparency");
+ 
+@@ -349,6 +379,7 @@ static void *vkcapture_source_create(obs_data_t *settings, obs_source_t *source)
+ 
+     vkcapture_source_t *ctx = bzalloc(sizeof(vkcapture_source_t));
+     ctx->source = source;
++    pthread_mutex_init(&ctx->audio_mutex, NULL);
+ 
+     vkcapture_source_update(ctx, settings);
+ 
+@@ -359,6 +390,8 @@ static void *vkcapture_source_create(obs_data_t *settings, obs_source_t *source)
+ 		ph,
+ 		"void get_hooked(out bool hooked, out string executable)",
+ 		vkcapture_get_hooked, ctx);
++    proc_handler_add(ph, "void get_capture_state(out bool capturing, out int pid)",
++                     cherries_capture_state, ctx);
+ 
+     UNUSED_PARAMETER(settings);
+     return ctx;
+@@ -376,8 +409,14 @@ static vkcapture_client_t *find_matching_client(vkcapture_source_t *ctx)
+                 break;
+             }
+         }
+-    } else if (server.clients.num) {
+-        client = server.clients.array + server.clients.num - 1;
++    } else {
++        for (size_t i = server.clients.num; i > 0; --i) {
++            vkcapture_client_t *candidate = server.clients.array + i - 1;
++            if (cherries_is_game_candidate(candidate->cdata.exe)) {
++                client = candidate;
++                break;
++            }
++        }
+     }
+     return client;
+ }
+@@ -414,6 +453,17 @@ static void vkcapture_get_hooked(void *data, calldata_t *cd)
+ 	calldata_set_string(cd, "executable", "");
+ }
+ 
++static void cherries_capture_state(void *data, calldata_t *cd)
++{
++    vkcapture_source_t *ctx = data;
++    pthread_mutex_lock(&server.mutex);
++    vkcapture_client_t *client = find_client_by_id(ctx->client_id);
++    bool capturing = client && ctx->texture && obs_source_showing(ctx->source);
++    calldata_set_bool(cd, "capturing", capturing);
++    calldata_set_int(cd, "pid", capturing ? client->pid : 0);
++    pthread_mutex_unlock(&server.mutex);
++}
++
+ static void fill_capture_control_data(struct capture_control_data *msg, vkcapture_client_t *client)
+ {
+     if (!p_glGetUnsignedBytei_vEXT) {
+@@ -459,11 +509,26 @@ static void activate_client(vkcapture_source_t *ctx, vkcapture_client_t *client,
+     client->timeout = clock_ns() + 5000000000; // 5s timeout
+ }
+ 
++static void vkcapture_game_audio_target(vkcapture_source_t *ctx, pid_t pid)
++{
++    pthread_mutex_lock(&ctx->audio_mutex);
++    if (ctx->game_audio && ctx->audio_pid != pid) {
++        cherries_game_audio_set_pid(ctx->game_audio, pid);
++        ctx->audio_pid = pid;
++    }
++    pthread_mutex_unlock(&ctx->audio_mutex);
++}
++static void vkcapture_source_hide(void *data)
++{
++    vkcapture_game_audio_target(data, 0);
++}
++
+ static void vkcapture_source_video_tick(void *data, float seconds)
+ {
+     vkcapture_source_t *ctx = data;
+ 
+     if (!obs_source_showing(ctx->source)) {
++        vkcapture_game_audio_target(ctx, 0);
+         return;
+     }
+ 
+@@ -549,7 +614,10 @@ static void vkcapture_source_video_tick(void *data, float seconds)
+         }
+     }
+ 
++    vkcapture_client_t *audio_client = find_client_by_id(ctx->client_id);
++    pid_t audio_pid = audio_client ? audio_client->pid : 0;
+     pthread_mutex_unlock(&server.mutex);
++    vkcapture_game_audio_target(ctx, audio_pid);
+ 
+     UNUSED_PARAMETER(seconds);
+ }
+@@ -739,6 +807,7 @@ static uint32_t vkcapture_source_get_height(void *data)
+ 
+ static void vkcapture_source_get_defaults(obs_data_t *defaults)
+ {
++    obs_data_set_default_bool(defaults, "capture_audio", true);
+     obs_data_set_default_bool(defaults, "show_cursor", true);
+     obs_data_set_default_bool(defaults, "allow_transparency", false);
+ }
+@@ -796,6 +865,8 @@ static obs_properties_t *vkcapture_source_get_properties(void *data)
+         obs_properties_add_bool(props, "show_cursor", obs_module_text("CaptureCursor"));
+     }
+ 
++    obs_properties_add_bool(props, "capture_audio", "Capture game audio");
++    obs_properties_add_text(props, "game_audio_hint", "Game audio follows the selected game and uses this source in the mixer. Desktop Audio can also capture that sound; disable it for that output to avoid doubling.", OBS_TEXT_INFO);
+     obs_properties_add_bool(props, "allow_transparency", obs_module_text("AllowTransparency"));
+ 
+     return props;
+@@ -834,11 +905,12 @@ static struct obs_source_info vkcapture_input = {
+     .id = "vkcapture-source",
+     .type = OBS_SOURCE_TYPE_INPUT,
+     .get_name = vkcapture_source_get_name,
+-    .output_flags = OBS_SOURCE_VIDEO | OBS_SOURCE_CUSTOM_DRAW | OBS_SOURCE_DO_NOT_DUPLICATE | OBS_SOURCE_SRGB,
++    .output_flags = OBS_SOURCE_AUDIO | OBS_SOURCE_VIDEO | OBS_SOURCE_CUSTOM_DRAW | OBS_SOURCE_DO_NOT_DUPLICATE | OBS_SOURCE_SRGB,
+     .create = vkcapture_source_create,
+     .destroy = vkcapture_source_destroy,
+     .update = vkcapture_source_update,
+     .video_tick = vkcapture_source_video_tick,
++    .hide = vkcapture_source_hide,
+     .video_render = vkcapture_source_render,
+     .get_width = vkcapture_source_get_width,
+     .get_height = vkcapture_source_get_height,
+@@ -964,15 +1036,16 @@ static void *server_thread_run(void *data)
+                 memset(&client.buf_fds, -1, sizeof(client.buf_fds));
+                 client.id = ++clientid;
+                 client.sockfd = clientfd;
+-                pthread_mutex_lock(&server.mutex);
+-                da_push_back(server.clients, &client);
+-                pthread_mutex_unlock(&server.mutex);
+-                server_add_fd(client.sockfd, POLLIN);
+                 struct ucred cred = {0};
+                 socklen_t cred_len = sizeof(cred);
+                 if (getsockopt(client.sockfd, SOL_SOCKET, SO_PEERCRED, &cred, &cred_len) != 0) {
+                     blog(LOG_WARNING, "Failed to get socket credentials: %s", strerror(errno));
+                 }
++                client.pid = cred.pid;
++                pthread_mutex_lock(&server.mutex);
++                da_push_back(server.clients, &client);
++                pthread_mutex_unlock(&server.mutex);
++                server_add_fd(client.sockfd, POLLIN);
+                 blog(LOG_INFO, "Client %d connected (pid=%d)", client.id, cred.pid);
+             } else {
+                 if (errno != EAGAIN && errno != EWOULDBLOCK && errno != ECONNABORTED) {
+@@ -1105,6 +1178,7 @@ bool obs_module_load(void)
+     }
+     pthread_setname_np(server.thread, PLUGIN_NAME);
+ 
++    pw_init(NULL, NULL);
+     obs_register_source(&vkcapture_input);
+     blog(LOG_INFO, "plugin loaded successfully (version %s)", PLUGIN_VERSION);
+ 
+@@ -1118,6 +1192,7 @@ void obs_module_unload()
+         pthread_join(server.thread, NULL);
+     }
+ 
++    pw_deinit();
+     blog(LOG_INFO, "plugin unloaded");
+ }
+ 

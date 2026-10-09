@@ -1,0 +1,14 @@
+#!/bin/sh
+if ! command -v steam >/dev/null 2>&1; then
+    message='Native Steam was not found. Flatpak Steam needs its matching Flatpak VkCapture runtime; host capture libraries cannot be injected into that sandbox.'
+    command -v zenity >/dev/null 2>&1 && zenity --error --text="$message"
+    echo "$message" >&2
+    exit 1
+fi
+if pgrep -u "$(id -u)" -x steam >/dev/null 2>&1; then
+    message='Quit Steam completely, then open Cherries Steam again to enable capture for its games.'
+    command -v zenity >/dev/null 2>&1 && zenity --info --text="$message"
+    echo "$message" >&2
+    exit 1
+fi
+exec cherries-gamecapture steam "$@"
